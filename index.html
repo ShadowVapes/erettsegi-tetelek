@@ -21,37 +21,41 @@
       <div class="sync-card card">
         <div class="sync-head">
           <div>
-            <h2>GitHub szinkron</h2>
-            <p>Közös mentés repo-ba</p>
+            <h2>Supabase élő szinkron</h2>
+            <p>Realtime adat + GitHub háttérmentés</p>
           </div>
           <button id="toggleSettingsBtn" class="ghost-btn small">Beállítás</button>
         </div>
         <div id="settingsPanel" class="settings-panel hidden">
           <label>
-            <span>Owner</span>
-            <input id="ghOwner" type="text" placeholder="pl. Teso123" autocomplete="off" />
+            <span>Supabase URL</span>
+            <input id="sbUrl" type="url" placeholder="https://projekt.supabase.co" autocomplete="off" />
           </label>
           <label>
-            <span>Repository</span>
-            <input id="ghRepo" type="text" placeholder="pl. erettsegi-site" autocomplete="off" />
+            <span>Publishable / anon key</span>
+            <input id="sbAnonKey" type="password" placeholder="sb_publishable_... / anon key" autocomplete="new-password" />
           </label>
           <label>
-            <span>Branch</span>
-            <input id="ghBranch" type="text" value="main" autocomplete="off" />
+            <span>Kép bucket</span>
+            <input id="sbBucket" type="text" value="page-images" autocomplete="off" />
           </label>
           <label>
-            <span>Token</span>
-            <input id="ghToken" type="password" placeholder="fine-grained PAT" autocomplete="new-password" />
+            <span>GitHub sync function</span>
+            <input id="syncFunctionName" type="text" value="sync-github" autocomplete="off" />
           </label>
           <div class="row gap">
-            <button id="saveGithubConfigBtn" class="secondary-btn">Beállítás mentése</button>
-            <button id="testGithubBtn" class="ghost-btn">Kapcsolat teszt</button>
+            <button id="saveSupabaseConfigBtn" class="secondary-btn">Beállítás mentése</button>
+            <button id="testSupabaseBtn" class="ghost-btn">Kapcsolat teszt</button>
           </div>
           <label class="checkbox-row">
-            <input id="preferRemoteToggle" type="checkbox" checked />
-            <span>Induláskor a GitHub legyen az elsődleges adatforrás</span>
+            <input id="autoGithubToggle" type="checkbox" checked />
+            <span>GitHub háttérmentés is menjen automatikusan</span>
           </label>
-          <p class="muted tiny">A token repo-nként külön van elmentve a böngészőben.</p>
+          <label class="checkbox-row">
+            <input id="preferRemoteToggle" type="checkbox" checked />
+            <span>Induláskor a Supabase legyen az elsődleges adatforrás</span>
+          </label>
+          <p class="muted tiny">A valós idejű közös adat a Supabase-ben van. A GitHub mentés háttér backupként fut.</p>
         </div>
       </div>
 
@@ -73,9 +77,9 @@
           </div>
         </div>
         <div class="topbar-actions">
-          <button id="reloadRemoteBtn" class="ghost-btn">GitHub újratöltés</button>
+          <button id="reloadRemoteBtn" class="ghost-btn">Közös adat újratöltés</button>
           <button id="clearLocalBtn" class="ghost-btn">Helyi cache törlése</button>
-          <button id="saveBtn" class="primary-btn">Mentés</button>
+          <button id="saveBtn" class="primary-btn">Mentés most</button>
         </div>
       </header>
 
@@ -145,6 +149,6 @@
     </div>
   </div>
 
-  <script src="assets/app.js"></script>
+  <script type="module" src="assets/app.js"></script>
 </body>
 </html>

@@ -1,15 +1,15 @@
-const APP_VERSION = 2;
+import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
+
+const APP_VERSION = 3;
 const STATIC_DATA_PATH = 'data/content.json';
-const GITHUB_DATA_PATH = 'data/content.json';
-const CONFIG_KEY = 'erettsegi_config_current_v2';
-const LOCAL_FALLBACK_SCOPE = 'local-only';
-const AUTOSAVE_DELAY_MS = 0;
-const AUTOSAVE_TEXT_THRESHOLD = 1;
-const REMOTE_POLL_MS = 1000;
-const BACKUP_COOLDOWN_MS = 180000;
-const SAVE_RETRY_ATTEMPTS = 1;
-const SAVE_RETRY_BASE_MS = 250;
-const SAVE_POST_SUCCESS_POLL_DELAY_MS = 300;
+const SINGLETON_ROW_ID = 1;
+const PATH_SCOPE = hashString(window.location.pathname || 'root');
+const CONFIG_KEY = `erettsegi_supabase_config_${PATH_SCOPE}_v1`;
+const LOCAL_STATE_KEY = `erettsegi_supabase_state_${PATH_SCOPE}_v1`;
+const SAVE_DEBOUNCE_MS = 220;
+const GITHUB_TEXT_SYNC_DEBOUNCE_MS = 1200;
+const DEFAULT_IMAGE_BUCKET = 'page-images';
+const DEFAULT_SYNC_FUNCTION = 'sync-github';
 
 const els = {
   subjectList: document.getElementById('subjectList'),
@@ -22,10 +22,11 @@ const els = {
   imageTools: document.getElementById('imageTools'),
   statusText: document.getElementById('statusText'),
   sourceText: document.getElementById('sourceText'),
-  ghOwner: document.getElementById('ghOwner'),
-  ghRepo: document.getElementById('ghRepo'),
-  ghBranch: document.getElementById('ghBranch'),
-  ghToken: document.getElementById('ghToken'),
+  sbUrl: document.getElementById('sbUrl'),
+  sbAnonKey: document.getElementById('sbAnonKey'),
+  sbBucket: document.getElementById('sbBucket'),
+  syncFunctionName: document.getElementById('syncFunctionName'),
+  autoGithubToggle: document.getElementById('autoGithubToggle'),
   preferRemoteToggle: document.getElementById('preferRemoteToggle'),
   imageInput: document.getElementById('imageInput'),
   modalBackdrop: document.getElementById('modalBackdrop'),
@@ -42,21 +43,24 @@ const stateRef = {
   selectedPageId: null,
   selectedImage: null,
   autosaveTimer: null,
-  remotePollTimer: null,
+  githubSyncTimer: null,
   modalResolver: null,
   loadedSource: 'Kezdés',
-  saveInFlight: false,
-  saveRequested: false,
-  pendingSaveOptions: { forceBackup: false, reason: 'Mentés' },
-  pendingTextChangeCount: 0,
-  hasUnsavedLocalChanges: false,
+  supabase: null,
+  realtimeChannel: null,
+  clientId: uid('client'),
+  remoteRevision: 0,
   localVersion: 0,
   syncedVersion: 0,
-  lastKnownRemoteVersion: null,
-  lastCommittedFingerprint: null,
-  lastSuccessfulSaveAt: 0,
-  lastBackupAt: 0,
+  hasUnsavedLocalChanges: false,
+  saveInFlight: false,
+  saveRequested: false,
+  pendingSaveOptions: { reason: 'Mentés', triggerGithub: true, immediateGithub: false, forceBackup: false },
+  githubSyncInFlight: false,
+  githubSyncRequested: false,
+  pendingGithubOptions: { reason: 'GitHub sync', immediate: false, forceBackup: false },
   lastStatusAt: 0,
+  lastRemoteEditorId: null,
 };
 
 function createEmptyState() {
@@ -88,8 +92,9 @@ function deepClone(obj) {
 
 function hashString(text) {
   let hash = 0;
-  for (let index = 0; index < text.length; index += 1) {
-    hash = ((hash << 5) - hash) + text.charCodeAt(index);
+  const normalized = String(text ?? '');
+  for (let index = 0; index < normalized.length; index += 1) {
+    hash = ((hash << 5) - hash) + normalized.charCodeAt(index);
     hash |= 0;
   }
   return `h${Math.abs(hash)}`;
@@ -101,8 +106,18 @@ function stateFingerprint(state) {
 
 function mergeSaveOptions(current, next = {}) {
   return {
-    forceBackup: Boolean(current?.forceBackup || next.forceBackup),
     reason: next.reason || current?.reason || 'Mentés',
+    triggerGithub: next.triggerGithub !== false || current?.triggerGithub !== false,
+    immediateGithub: Boolean(current?.immediateGithub || next.immediateGithub),
+    forceBackup: Boolean(current?.forceBackup || next.forceBackup),
+  };
+}
+
+function mergeGithubOptions(current, next = {}) {
+  return {
+    reason: next.reason || current?.reason || 'GitHub sync',
+    immediate: Boolean(current?.immediate || next.immediate),
+    forceBackup: Boolean(current?.forceBackup || next.forceBackup),
   };
 }
 
@@ -117,211 +132,183 @@ function chooseNewer(a, b) {
   return getTimestampValue(a.updatedAt) >= getTimestampValue(b.updatedAt) ? deepClone(a) : deepClone(b);
 }
 
-function toRepoScope(config = getConfig()) {
-  const owner = (config.owner || '').trim();
-  const repo = (config.repo || '').trim();
-  if (!owner || !repo) return LOCAL_FALLBACK_SCOPE;
-  return `${owner}__${repo}`.toLowerCase();
-}
-
-function stateKey(scope = toRepoScope()) {
-  return `erettsegi_state_${scope}_v2`;
-}
-
-function tokenKey(scope = toRepoScope()) {
-  return `erettsegi_token_${scope}_v2`;
-}
-
-function setStatus(message, tone = 'normal') {
-  stateRef.lastStatusAt = Date.now();
-  els.statusText.textContent = message;
-  els.statusText.style.color = tone === 'error'
-    ? 'var(--danger)'
-    : tone === 'success'
-      ? 'var(--success)'
-      : tone === 'warning'
-        ? 'var(--warning)'
-        : '';
-}
-
-function setSource(text) {
-  stateRef.loadedSource = text;
-  els.sourceText.textContent = text;
-}
-
 function normalizeState(raw) {
-  const base = createEmptyState();
-  if (!raw || typeof raw !== 'object') return base;
-
-  const normalized = {
+  const base = raw && typeof raw === 'object' ? raw : createEmptyState();
+  return {
     version: APP_VERSION,
-    updatedAt: raw.updatedAt || nowIso(),
-    subjects: [],
-    deletedSubjects: Array.isArray(raw.deletedSubjects) ? raw.deletedSubjects : [],
-    deletedPages: Array.isArray(raw.deletedPages) ? raw.deletedPages : [],
+    updatedAt: base.updatedAt || nowIso(),
+    subjects: Array.isArray(base.subjects)
+      ? base.subjects.map(subject => {
+          const subjectCreated = subject.createdAt || subject.updatedAt || nowIso();
+          return {
+            id: subject.id || uid('subject'),
+            title: subject.title || 'Névtelen tantárgy',
+            createdAt: subjectCreated,
+            updatedAt: subject.updatedAt || subjectCreated,
+            pages: Array.isArray(subject.pages)
+              ? subject.pages.map(page => {
+                  const pageCreated = page.createdAt || page.updatedAt || nowIso();
+                  return {
+                    id: page.id || uid('page'),
+                    title: page.title || 'Névtelen oldal',
+                    content: page.content || '',
+                    createdAt: pageCreated,
+                    updatedAt: page.updatedAt || pageCreated,
+                  };
+                })
+              : [],
+          };
+        })
+      : [],
+    deletedSubjects: Array.isArray(base.deletedSubjects)
+      ? base.deletedSubjects.map(item => ({ id: item.id, updatedAt: item.updatedAt || nowIso() }))
+      : [],
+    deletedPages: Array.isArray(base.deletedPages)
+      ? base.deletedPages.map(item => ({ id: item.id, subjectId: item.subjectId || null, updatedAt: item.updatedAt || nowIso() }))
+      : [],
   };
-
-  const subjects = Array.isArray(raw.subjects) ? raw.subjects : [];
-  normalized.subjects = subjects.map((subject, subjectIndex) => {
-    const subjectCreated = subject.createdAt || subject.updatedAt || nowIso();
-    const pages = Array.isArray(subject.pages) ? subject.pages : [];
-    return {
-      id: subject.id || uid(`subject_${subjectIndex}`),
-      title: subject.title || `Tantárgy ${subjectIndex + 1}`,
-      createdAt: subjectCreated,
-      updatedAt: subject.updatedAt || subjectCreated,
-      pages: pages.map((page, pageIndex) => {
-        const pageCreated = page.createdAt || page.updatedAt || nowIso();
-        return {
-          id: page.id || uid(`page_${pageIndex}`),
-          title: page.title || `Oldal ${pageIndex + 1}`,
-          content: typeof page.content === 'string' ? page.content : '',
-          createdAt: pageCreated,
-          updatedAt: page.updatedAt || pageCreated,
-        };
-      }),
-    };
-  });
-
-  normalized.deletedSubjects = normalized.deletedSubjects
-    .filter(item => item && item.id)
-    .map(item => ({ id: item.id, updatedAt: item.updatedAt || nowIso() }));
-
-  normalized.deletedPages = normalized.deletedPages
-    .filter(item => item && item.id)
-    .map(item => ({ id: item.id, subjectId: item.subjectId || null, updatedAt: item.updatedAt || nowIso() }));
-
-  normalized.subjects.sort((a, b) => getTimestampValue(a.createdAt) - getTimestampValue(b.createdAt));
-  normalized.subjects.forEach(subject => {
-    subject.pages.sort((a, b) => getTimestampValue(a.createdAt) - getTimestampValue(b.createdAt));
-  });
-
-  return normalized;
 }
 
 function mergeStates(remoteRaw, localRaw) {
   const remote = normalizeState(remoteRaw);
   const local = normalizeState(localRaw);
 
+  const subjectMap = new Map();
   const deletedSubjectMap = new Map();
   const deletedPageMap = new Map();
 
   for (const item of [...remote.deletedSubjects, ...local.deletedSubjects]) {
     const existing = deletedSubjectMap.get(item.id);
     if (!existing || getTimestampValue(item.updatedAt) > getTimestampValue(existing.updatedAt)) {
-      deletedSubjectMap.set(item.id, deepClone(item));
+      deletedSubjectMap.set(item.id, { ...item });
     }
   }
 
   for (const item of [...remote.deletedPages, ...local.deletedPages]) {
     const existing = deletedPageMap.get(item.id);
     if (!existing || getTimestampValue(item.updatedAt) > getTimestampValue(existing.updatedAt)) {
-      deletedPageMap.set(item.id, deepClone(item));
+      deletedPageMap.set(item.id, { ...item });
     }
   }
 
-  const remoteSubjects = new Map(remote.subjects.map(subject => [subject.id, subject]));
-  const localSubjects = new Map(local.subjects.map(subject => [subject.id, subject]));
-  const subjectIds = new Set([...remoteSubjects.keys(), ...localSubjects.keys()]);
+  for (const subject of [...remote.subjects, ...local.subjects]) {
+    const existing = subjectMap.get(subject.id);
+    if (!existing) {
+      subjectMap.set(subject.id, deepClone(subject));
+      continue;
+    }
+    const chosenSubject = chooseNewer(existing, subject);
+    const pageMap = new Map();
+    for (const page of [...existing.pages, ...subject.pages]) {
+      const current = pageMap.get(page.id);
+      pageMap.set(page.id, chooseNewer(current, page));
+    }
+    chosenSubject.pages = [...pageMap.values()].sort((a, b) => getTimestampValue(a.createdAt) - getTimestampValue(b.createdAt));
+    subjectMap.set(subject.id, chosenSubject);
+  }
+
   const mergedSubjects = [];
 
-  for (const subjectId of subjectIds) {
-    const remoteSubject = remoteSubjects.get(subjectId);
-    const localSubject = localSubjects.get(subjectId);
-    const deletedSubject = deletedSubjectMap.get(subjectId);
-    const chosenSubject = chooseNewer(remoteSubject, localSubject);
-    if (!chosenSubject) continue;
-    if (deletedSubject && getTimestampValue(deletedSubject.updatedAt) >= getTimestampValue(chosenSubject.updatedAt)) continue;
+  for (const subject of subjectMap.values()) {
+    const deletedSubject = deletedSubjectMap.get(subject.id);
+    if (deletedSubject && getTimestampValue(deletedSubject.updatedAt) >= getTimestampValue(subject.updatedAt)) continue;
 
-    const remotePages = new Map((remoteSubject?.pages || []).map(page => [page.id, page]));
-    const localPages = new Map((localSubject?.pages || []).map(page => [page.id, page]));
-    const pageIds = new Set([...remotePages.keys(), ...localPages.keys()]);
-    const mergedPages = [];
-
-    for (const pageId of pageIds) {
-      const deletedPage = deletedPageMap.get(pageId);
-      const chosenPage = chooseNewer(remotePages.get(pageId), localPages.get(pageId));
-      if (!chosenPage) continue;
-      if (deletedPage && getTimestampValue(deletedPage.updatedAt) >= getTimestampValue(chosenPage.updatedAt)) continue;
-      mergedPages.push(chosenPage);
+    const pageMap = new Map();
+    for (const page of subject.pages) {
+      const current = pageMap.get(page.id);
+      pageMap.set(page.id, chooseNewer(current, page));
     }
 
-    mergedPages.sort((a, b) => getTimestampValue(a.createdAt) - getTimestampValue(b.createdAt));
-    chosenSubject.pages = mergedPages;
-    mergedSubjects.push(chosenSubject);
+    const chosenPages = [];
+    for (const page of pageMap.values()) {
+      const deletedPage = deletedPageMap.get(page.id);
+      if (deletedPage && getTimestampValue(deletedPage.updatedAt) >= getTimestampValue(page.updatedAt)) continue;
+      chosenPages.push(page);
+    }
+
+    subject.pages = chosenPages.sort((a, b) => getTimestampValue(a.createdAt) - getTimestampValue(b.createdAt));
+    mergedSubjects.push(subject);
   }
 
-  mergedSubjects.sort((a, b) => getTimestampValue(a.createdAt) - getTimestampValue(b.createdAt));
-
-  const mergedState = {
+  return {
     version: APP_VERSION,
     updatedAt: [remote.updatedAt, local.updatedAt, nowIso()].sort((a, b) => getTimestampValue(a) - getTimestampValue(b)).at(-1),
-    subjects: mergedSubjects,
+    subjects: mergedSubjects.sort((a, b) => getTimestampValue(a.createdAt) - getTimestampValue(b.createdAt)),
     deletedSubjects: [...deletedSubjectMap.values()].sort((a, b) => getTimestampValue(a.updatedAt) - getTimestampValue(b.updatedAt)),
     deletedPages: [...deletedPageMap.values()].sort((a, b) => getTimestampValue(a.updatedAt) - getTimestampValue(b.updatedAt)),
   };
+}
 
-  return mergedState;
+function setStatus(message, tone = 'normal') {
+  stateRef.lastStatusAt = Date.now();
+  els.statusText.textContent = message;
+  els.statusText.dataset.tone = tone;
+}
+
+function setSource(message) {
+  stateRef.loadedSource = message;
+  els.sourceText.textContent = message;
 }
 
 function getConfig() {
   const raw = safeJsonParse(localStorage.getItem(CONFIG_KEY), {}) || {};
-  const config = {
-    owner: raw.owner || '',
-    repo: raw.repo || '',
-    branch: raw.branch || 'main',
+  return {
+    supabaseUrl: raw.supabaseUrl || '',
+    supabaseAnonKey: raw.supabaseAnonKey || '',
+    imageBucket: raw.imageBucket || DEFAULT_IMAGE_BUCKET,
+    syncFunction: raw.syncFunction || DEFAULT_SYNC_FUNCTION,
+    autoGithubSync: raw.autoGithubSync !== false,
     preferRemote: raw.preferRemote !== false,
   };
-  const scope = toRepoScope(config);
-  config.token = localStorage.getItem(tokenKey(scope)) || '';
-  return config;
 }
 
 function saveConfig(config) {
-  const baseConfig = {
-    owner: (config.owner || '').trim(),
-    repo: (config.repo || '').trim(),
-    branch: (config.branch || 'main').trim() || 'main',
+  const next = {
+    supabaseUrl: (config.supabaseUrl || '').trim(),
+    supabaseAnonKey: (config.supabaseAnonKey || '').trim(),
+    imageBucket: (config.imageBucket || DEFAULT_IMAGE_BUCKET).trim() || DEFAULT_IMAGE_BUCKET,
+    syncFunction: (config.syncFunction || DEFAULT_SYNC_FUNCTION).trim() || DEFAULT_SYNC_FUNCTION,
+    autoGithubSync: Boolean(config.autoGithubSync),
     preferRemote: Boolean(config.preferRemote),
   };
-
-  localStorage.setItem(CONFIG_KEY, JSON.stringify(baseConfig));
-  const scope = toRepoScope(baseConfig);
-  if (config.token) {
-    localStorage.setItem(tokenKey(scope), config.token.trim());
-  }
-  return { ...baseConfig, token: config.token?.trim() || '' };
+  localStorage.setItem(CONFIG_KEY, JSON.stringify(next));
+  return next;
 }
 
 function readFormConfig() {
   return {
-    owner: els.ghOwner.value,
-    repo: els.ghRepo.value,
-    branch: els.ghBranch.value || 'main',
-    token: els.ghToken.value,
+    supabaseUrl: els.sbUrl.value,
+    supabaseAnonKey: els.sbAnonKey.value,
+    imageBucket: els.sbBucket.value,
+    syncFunction: els.syncFunctionName.value,
+    autoGithubSync: els.autoGithubToggle.checked,
     preferRemote: els.preferRemoteToggle.checked,
   };
 }
 
 function populateConfigForm(config) {
-  els.ghOwner.value = config.owner || '';
-  els.ghRepo.value = config.repo || '';
-  els.ghBranch.value = config.branch || 'main';
-  els.ghToken.value = config.token || '';
+  els.sbUrl.value = config.supabaseUrl || '';
+  els.sbAnonKey.value = config.supabaseAnonKey || '';
+  els.sbBucket.value = config.imageBucket || DEFAULT_IMAGE_BUCKET;
+  els.syncFunctionName.value = config.syncFunction || DEFAULT_SYNC_FUNCTION;
+  els.autoGithubToggle.checked = config.autoGithubSync !== false;
   els.preferRemoteToggle.checked = config.preferRemote !== false;
 }
 
 function saveLocalDraft(state = stateRef.state) {
-  const scope = toRepoScope(getConfig());
-  localStorage.setItem(stateKey(scope), JSON.stringify(state));
+  localStorage.setItem(LOCAL_STATE_KEY, JSON.stringify(normalizeState(state)));
 }
 
-function loadLocalDraft(config = getConfig()) {
-  return safeJsonParse(localStorage.getItem(stateKey(toRepoScope(config))), null);
+function loadLocalDraft() {
+  return safeJsonParse(localStorage.getItem(LOCAL_STATE_KEY), null);
 }
 
-function clearLocalDraft(config = getConfig()) {
-  localStorage.removeItem(stateKey(toRepoScope(config)));
+function clearLocalDraft() {
+  localStorage.removeItem(LOCAL_STATE_KEY);
+}
+
+function currentConfigIsComplete(config = getConfig()) {
+  return Boolean(config.supabaseUrl && config.supabaseAnonKey);
 }
 
 function getSelectedSubject() {
@@ -466,10 +453,14 @@ function renderEditor() {
   }
 
   els.pageTitleInput.disabled = false;
-  els.pageTitleInput.value = page.title;
+  if (els.pageTitleInput.value !== page.title) {
+    els.pageTitleInput.value = page.title;
+  }
   els.pageInfo.textContent = `Utolsó módosítás: ${formatDate(page.updatedAt)}`;
-  if (els.editor.innerHTML !== page.content) {
+  if (document.activeElement !== els.editor && els.editor.innerHTML !== page.content) {
     els.editor.innerHTML = page.content || '';
+  } else if (document.activeElement !== els.editor && !page.content && els.editor.innerHTML) {
+    els.editor.innerHTML = '';
   }
   els.editor.setAttribute('contenteditable', 'true');
   hideImageTools();
@@ -517,7 +508,7 @@ function addSubject() {
   saveLocalDraft();
   render();
   setStatus('Tantárgy létrehozva.', 'success');
-  requestGithubSync({ immediate: true, forceBackup: true, reason: 'Új tantárgy mentése' });
+  requestRemoteSave({ immediate: true, reason: 'Új tantárgy', triggerGithub: true, immediateGithub: true, forceBackup: true });
 }
 
 function renameSubject(subjectId) {
@@ -531,7 +522,7 @@ function renameSubject(subjectId) {
   saveLocalDraft();
   render();
   setStatus('Tantárgy átnevezve.', 'success');
-  requestGithubSync({ immediate: true, forceBackup: true, reason: 'Tantárgy átnevezése' });
+  requestRemoteSave({ immediate: true, reason: 'Tantárgy átnevezése', triggerGithub: true, immediateGithub: true, forceBackup: true });
 }
 
 async function deleteSubject(subjectId) {
@@ -555,7 +546,7 @@ async function deleteSubject(subjectId) {
   saveLocalDraft();
   render();
   setStatus('Tantárgy törölve.', 'success');
-  requestGithubSync({ immediate: true, forceBackup: true, reason: 'Tantárgy törlése' });
+  requestRemoteSave({ immediate: true, reason: 'Tantárgy törlése', triggerGithub: true, immediateGithub: true, forceBackup: true });
 }
 
 function addPage() {
@@ -583,7 +574,7 @@ function addPage() {
   render();
   focusEditorSoon();
   setStatus('Oldal létrehozva.', 'success');
-  requestGithubSync({ immediate: true, forceBackup: true, reason: 'Új oldal mentése' });
+  requestRemoteSave({ immediate: true, reason: 'Új oldal', triggerGithub: true, immediateGithub: true, forceBackup: true });
 }
 
 function renamePage(pageId) {
@@ -598,7 +589,7 @@ function renamePage(pageId) {
   saveLocalDraft();
   render();
   setStatus('Oldal átnevezve.', 'success');
-  requestGithubSync({ immediate: true, forceBackup: true, reason: 'Oldal átnevezése' });
+  requestRemoteSave({ immediate: true, reason: 'Oldal átnevezése', triggerGithub: true, immediateGithub: true, forceBackup: true });
 }
 
 async function deletePage(pageId) {
@@ -619,7 +610,7 @@ async function deletePage(pageId) {
   saveLocalDraft();
   render();
   setStatus('Oldal törölve.', 'success');
-  requestGithubSync({ immediate: true, forceBackup: true, reason: 'Oldal törlése' });
+  requestRemoteSave({ immediate: true, reason: 'Oldal törlése', triggerGithub: true, immediateGithub: true, forceBackup: true });
 }
 
 function syncEditorIntoState() {
@@ -643,47 +634,14 @@ function syncEditorIntoState() {
     subject.updatedAt = timestamp;
     markStateUpdated();
     saveLocalDraft();
-    stateRef.hasUnsavedLocalChanges = true;
     els.pageInfo.textContent = `Utolsó módosítás: ${formatDate(page.updatedAt)}`;
   }
   return changed;
 }
 
-function requestGithubSync(options = {}) {
-  syncEditorIntoState();
-  saveLocalDraft();
-
-  const config = getConfig();
-  if (!currentConfigIsComplete(config) || !config.token) {
-    setSource('Helyi draft');
-    setStatus('Helyi mentés kész. GitHub szinkronhoz owner / repo / branch / token kell.', 'warning');
-    return;
-  }
-
-  stateRef.pendingSaveOptions = mergeSaveOptions(stateRef.pendingSaveOptions, options);
-  stateRef.saveRequested = true;
-  window.clearTimeout(stateRef.autosaveTimer);
-
-  const delay = options.immediate ? 0 : (options.delay ?? AUTOSAVE_DELAY_MS);
-  stateRef.autosaveTimer = window.setTimeout(() => {
-    stateRef.autosaveTimer = null;
-    flushPendingGithubSave();
-  }, delay);
-}
-
-function sleep(ms) {
-  return new Promise(resolve => window.setTimeout(resolve, ms));
-}
-
-function isRetriableGithubError(error) {
-  if (!error) return true;
-  const status = Number(error.status || 0);
-  return !status || status === 409 || status === 423 || status === 425 || status === 429 || status >= 500;
-}
-
 function estimateInputWeight(event) {
   if (event?.inputType === 'insertFromPaste') {
-    return Math.max(AUTOSAVE_TEXT_THRESHOLD, event.data?.length || 0, 1);
+    return Math.max(event.data?.length || 0, 1);
   }
   if (typeof event?.data === 'string' && event.data.length) {
     return event.data.length;
@@ -694,20 +652,14 @@ function estimateInputWeight(event) {
 function queueRealtimeAutosave(event) {
   const changed = syncEditorIntoState();
   if (!changed) return;
-
-  stateRef.pendingTextChangeCount += estimateInputWeight(event);
-  const shouldPushNow = stateRef.pendingTextChangeCount >= AUTOSAVE_TEXT_THRESHOLD
-    || event?.inputType === 'insertFromPaste'
-    || String(event?.inputType || '').includes('delete');
-
-  if (shouldPushNow) {
-    stateRef.pendingTextChangeCount = 0;
-  }
-
-  requestGithubSync({
-    immediate: true,
-    delay: AUTOSAVE_DELAY_MS,
-    reason: 'Automatikus GitHub mentés',
+  const immediateGithub = String(event?.inputType || '').includes('delete') || event?.inputType === 'insertFromPaste';
+  requestRemoteSave({
+    immediate: false,
+    delay: SAVE_DEBOUNCE_MS,
+    reason: 'Automatikus mentés',
+    triggerGithub: true,
+    immediateGithub,
+    forceBackup: false,
   });
 }
 
@@ -732,286 +684,295 @@ function closeModal(result) {
   }
 }
 
-function currentConfigIsComplete(config = getConfig()) {
-  return Boolean(config.owner && config.repo && config.branch);
-}
-
-function githubHeaders(config, json = true) {
-  const headers = {
-    'Accept': 'application/vnd.github+json',
-    'X-GitHub-Api-Version': '2022-11-28',
-  };
-  if (config.token) headers.Authorization = `Bearer ${config.token}`;
-  if (json) headers['Content-Type'] = 'application/json';
-  return headers;
-}
-
-async function githubRequest(url, config, options = {}) {
-  const response = await fetch(url, {
-    ...options,
-    headers: {
-      ...githubHeaders(config, options.body !== undefined),
-      ...(options.headers || {}),
+function createSupabaseBrowserClient(config = getConfig()) {
+  return createClient(config.supabaseUrl, config.supabaseAnonKey, {
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+      detectSessionInUrl: false,
     },
   });
+}
 
-  const text = await response.text();
-  const data = safeJsonParse(text, text);
-  if (!response.ok) {
-    const error = new Error(`GitHub hiba: ${response.status}`);
-    error.status = response.status;
-    error.data = data;
+function getSupabase() {
+  if (!stateRef.supabase) {
+    const config = getConfig();
+    if (!currentConfigIsComplete(config)) return null;
+    stateRef.supabase = createSupabaseBrowserClient(config);
+  }
+  return stateRef.supabase;
+}
+
+function resetSupabaseClient() {
+  if (stateRef.realtimeChannel) {
+    stateRef.supabase?.removeChannel?.(stateRef.realtimeChannel);
+    stateRef.realtimeChannel = null;
+  }
+  stateRef.supabase = null;
+  stateRef.remoteRevision = 0;
+}
+
+async function fetchRemoteRow() {
+  const supabase = getSupabase();
+  if (!supabase) return null;
+  const { data, error } = await supabase
+    .from('app_state')
+    .select('id, data, revision, updated_at, editor_id')
+    .eq('id', SINGLETON_ROW_ID)
+    .maybeSingle();
+  if (error) throw error;
+  return data || null;
+}
+
+async function insertInitialRemoteRow(seedState) {
+  const supabase = getSupabase();
+  const payload = normalizeState(seedState);
+  payload.updatedAt = nowIso();
+  const { data, error } = await supabase
+    .from('app_state')
+    .insert({
+      id: SINGLETON_ROW_ID,
+      data: payload,
+      revision: 1,
+      updated_at: nowIso(),
+      editor_id: stateRef.clientId,
+    })
+    .select('id, data, revision, updated_at, editor_id')
+    .single();
+
+  if (error) {
+    if (String(error.code || '') === '23505') {
+      return fetchRemoteRow();
+    }
     throw error;
   }
   return data;
 }
 
-function buildRepoApiBase(config) {
-  return `https://api.github.com/repos/${encodeURIComponent(config.owner)}/${encodeURIComponent(config.repo)}`;
+async function ensureRemoteRow(seedState) {
+  let row = await fetchRemoteRow();
+  if (row) return row;
+  return insertInitialRemoteRow(seedState);
 }
 
-function utf8ToBase64(text) {
-  return btoa(unescape(encodeURIComponent(text)));
-}
+function applyRemoteRow(row, options = {}) {
+  if (!row) return;
+  const remoteState = normalizeState(row.data);
+  const remoteRevision = Number(row.revision || 0);
+  const incomingFingerprint = stateFingerprint(remoteState);
+  const currentFingerprint = stateFingerprint(stateRef.state);
 
-function base64ToUtf8(base64) {
-  return decodeURIComponent(escape(atob(base64.replace(/\n/g, ''))));
-}
+  stateRef.remoteRevision = remoteRevision;
+  stateRef.lastRemoteEditorId = row.editor_id || null;
 
-async function githubTestConnection() {
-  const config = readFormConfig();
-  if (!currentConfigIsComplete(config)) {
-    setStatus('Add meg az owner / repo / branch adatokat is.', 'warning');
-    return;
+  if (options.merge) {
+    stateRef.state = mergeStates(remoteState, stateRef.state);
+  } else {
+    stateRef.state = remoteState;
   }
-  setStatus('Kapcsolat teszt fut...');
-  try {
-    const url = buildRepoApiBase(config);
-    const repoInfo = await githubRequest(url, config, { method: 'GET' });
-    saveConfig(config);
-    setStatus(`Kapcsolat rendben: ${repoInfo.full_name}`, 'success');
-    setSource(`GitHub repo: ${repoInfo.full_name}`);
-  } catch (error) {
-    setStatus(formatGithubError(error), 'error');
+
+  saveLocalDraft();
+  if (incomingFingerprint !== currentFingerprint || options.forceRender) {
+    render();
   }
 }
 
-async function githubGetFile(path, config) {
-  const url = `${buildRepoApiBase(config)}/contents/${path}?ref=${encodeURIComponent(config.branch)}`;
-  try {
-    const data = await githubRequest(url, config, { method: 'GET' });
-    return {
-      exists: true,
-      sha: data.sha,
-      content: data.content ? base64ToUtf8(data.content) : '',
-      raw: data,
-    };
-  } catch (error) {
-    if (error.status === 404) {
-      return { exists: false, sha: null, content: '', raw: null };
-    }
-    throw error;
-  }
+function getEditorSignature() {
+  return `${stateRef.selectedSubjectId || ''}:${stateRef.selectedPageId || ''}`;
 }
 
-async function githubPutFile(path, contentText, config, sha = null, message = 'Update file') {
-  const url = `${buildRepoApiBase(config)}/contents/${path}`;
-  const payload = {
-    message,
-    content: utf8ToBase64(contentText),
-    branch: config.branch,
-  };
-  if (sha) payload.sha = sha;
-  return githubRequest(url, config, {
-    method: 'PUT',
-    body: JSON.stringify(payload),
-  });
-}
-
-function buildRawFileUrl(path, config) {
-  return `https://raw.githubusercontent.com/${encodeURIComponent(config.owner)}/${encodeURIComponent(config.repo)}/${encodeURIComponent(config.branch)}/${path}`;
-}
-
-async function fetchRawRemoteFile(path, config) {
-  const response = await fetch(`${buildRawFileUrl(path, config)}?v=${Date.now()}`, { cache: 'no-store' });
-  if (!response.ok) {
-    if (response.status === 404) {
-      return { exists: false, sha: null, content: '', raw: null };
-    }
-    throw new Error(`A nyers GitHub fájl nem tölthető be (${response.status}).`);
-  }
-  const content = await response.text();
-  return {
-    exists: true,
-    sha: `raw-${hashString(content)}`,
-    content,
-    raw: null,
-  };
-}
-
-async function getRemoteFileForRead(config = getConfig()) {
-  if (!currentConfigIsComplete(config)) {
-    return { exists: false, sha: null, content: '', raw: null };
-  }
-
-  if (!config.token) {
-    return fetchRawRemoteFile(GITHUB_DATA_PATH, config);
-  }
-
-  try {
-    return await githubGetFile(GITHUB_DATA_PATH, config);
-  } catch (error) {
-    return fetchRawRemoteFile(GITHUB_DATA_PATH, config);
-  }
-}
-
-async function loadRemoteSnapshot(config = getConfig()) {
-  const remoteFile = await getRemoteFileForRead(config);
-  const state = remoteFile.exists
-    ? normalizeState(safeJsonParse(remoteFile.content, createEmptyState()))
-    : createEmptyState();
-  return { state, version: remoteFile.sha || stateFingerprint(state), file: remoteFile };
-}
-
-function shouldCreateBackup(forceBackup = false) {
-  if (forceBackup) return true;
-  return (Date.now() - stateRef.lastBackupAt) >= BACKUP_COOLDOWN_MS;
-}
-
-async function createBackupSnapshot(config, mergedState) {
-  const backupPath = `backup/content-${new Date().toISOString().replace(/[:.]/g, '-')}-${Math.random().toString(16).slice(2, 8)}.json`;
-  const backupPayload = JSON.stringify({
-    savedAt: nowIso(),
-    source: 'browser-app',
-    data: mergedState,
-  }, null, 2);
-  await githubPutFile(
-    backupPath,
-    backupPayload,
-    config,
-    null,
-    `Backup: ${new Date().toLocaleString('hu-HU')}`,
-  );
-  stateRef.lastBackupAt = Date.now();
-}
-
-async function performGithubSave(options = {}) {
-  const config = getConfig();
-  if (!currentConfigIsComplete(config) || !config.token) {
-    setStatus('GitHub mentéshez owner / repo / branch / token is kell.', 'warning');
+async function performRemoteSave(options = {}) {
+  const supabase = getSupabase();
+  if (!supabase) {
+    setSource('Helyi draft');
+    setStatus('Helyi mentés kész. Supabase beállítás kell a közös szinkronhoz.', 'warning');
     return false;
   }
 
   syncEditorIntoState();
   saveLocalDraft();
-  setStatus('GitHub mentés folyamatban...');
 
-  const remoteFile = await githubGetFile(GITHUB_DATA_PATH, config);
-  const remoteState = remoteFile.exists
-    ? normalizeState(safeJsonParse(remoteFile.content, createEmptyState()))
-    : createEmptyState();
+  let targetVersion = stateRef.localVersion;
+  let localStateToSave = normalizeState(deepClone(stateRef.state));
+  localStateToSave.updatedAt = nowIso();
+  const editorSignature = getEditorSignature();
 
-  const mergedState = mergeStates(remoteState, stateRef.state);
-  const mergedFingerprint = stateFingerprint(mergedState);
-  const remoteFingerprint = stateFingerprint(remoteState);
+  setStatus('Supabase mentés folyamatban...');
 
-  if (remoteFile.exists && mergedFingerprint === remoteFingerprint && !shouldCreateBackup(options.forceBackup)) {
-    stateRef.state = mergedState;
-    stateRef.lastKnownRemoteVersion = remoteFile.sha || mergedFingerprint;
-    stateRef.lastCommittedFingerprint = mergedFingerprint;
-    stateRef.lastSuccessfulSaveAt = Date.now();
-    stateRef.hasUnsavedLocalChanges = false;
-    stateRef.syncedVersion = stateRef.localVersion;
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    if (stateRef.remoteRevision <= 0) {
+      const row = await ensureRemoteRow(localStateToSave);
+      if (!row) throw new Error('A közös adat nem hozható létre.');
+      stateRef.remoteRevision = Number(row.revision || 0);
+      if (row.editor_id === stateRef.clientId && stateFingerprint(normalizeState(row.data)) === stateFingerprint(localStateToSave)) {
+        break;
+      }
+    }
+
+    const nextRevision = stateRef.remoteRevision + 1;
+    const { data, error } = await supabase
+      .from('app_state')
+      .update({
+        data: localStateToSave,
+        revision: nextRevision,
+        updated_at: nowIso(),
+        editor_id: stateRef.clientId,
+      })
+      .eq('id', SINGLETON_ROW_ID)
+      .eq('revision', stateRef.remoteRevision)
+      .select('id, data, revision, updated_at, editor_id')
+      .maybeSingle();
+
+    if (error) {
+      throw error;
+    }
+
+    if (data) {
+      stateRef.remoteRevision = Number(data.revision || nextRevision);
+      if (stateRef.localVersion > targetVersion) {
+        stateRef.syncedVersion = Math.max(stateRef.syncedVersion, targetVersion);
+        stateRef.hasUnsavedLocalChanges = stateRef.syncedVersion < stateRef.localVersion;
+        saveLocalDraft();
+      } else {
+        stateRef.state = normalizeState(data.data);
+        stateRef.syncedVersion = stateRef.localVersion;
+        stateRef.hasUnsavedLocalChanges = false;
+        saveLocalDraft();
+        if (document.activeElement !== els.editor || editorSignature !== getEditorSignature()) {
+          render();
+        }
+      }
+      setSource('Supabase élő adat');
+      setStatus('Supabase mentés kész.', 'success');
+      if (options.triggerGithub !== false) {
+        requestGithubSync({
+          reason: options.reason || 'GitHub sync',
+          immediate: Boolean(options.immediateGithub),
+          forceBackup: Boolean(options.forceBackup),
+        });
+      }
+      return true;
+    }
+
+    const remoteRow = await fetchRemoteRow();
+    if (!remoteRow) {
+      const inserted = await insertInitialRemoteRow(localStateToSave);
+      stateRef.remoteRevision = Number(inserted?.revision || 1);
+      continue;
+    }
+
+    stateRef.remoteRevision = Number(remoteRow.revision || 0);
+    const remoteState = normalizeState(remoteRow.data);
+    stateRef.state = mergeStates(remoteState, stateRef.state);
     saveLocalDraft();
-    setSource(`GitHub: ${config.owner}/${config.repo}@${config.branch}`);
-    setStatus('GitHub adat már szinkronban van.', 'success');
-    render();
-    return true;
+    localStateToSave = normalizeState(deepClone(stateRef.state));
+    localStateToSave.updatedAt = nowIso();
+    targetVersion = stateRef.localVersion;
   }
 
-  mergedState.updatedAt = nowIso();
-  const contentText = JSON.stringify(mergedState, null, 2);
-
-  const saveResult = await githubPutFile(
-    GITHUB_DATA_PATH,
-    contentText,
-    config,
-    remoteFile.sha,
-    `${options.reason || 'Mentés'}: ${new Date().toLocaleString('hu-HU')}`,
-  );
-
-  if (shouldCreateBackup(options.forceBackup)) {
-    await createBackupSnapshot(config, mergedState);
-  }
-
-  stateRef.state = mergedState;
-  stateRef.lastKnownRemoteVersion = saveResult?.content?.sha || stateFingerprint(mergedState);
-  stateRef.lastCommittedFingerprint = stateFingerprint(mergedState);
-  stateRef.lastSuccessfulSaveAt = Date.now();
-  stateRef.hasUnsavedLocalChanges = false;
-  stateRef.syncedVersion = stateRef.localVersion;
-  saveLocalDraft();
-  setSource(`GitHub: ${config.owner}/${config.repo}@${config.branch}`);
-  setStatus('GitHub mentés kész. A közös adat frissült.', 'success');
-  render();
-  window.setTimeout(() => {
-    pollRemoteUpdates();
-  }, SAVE_POST_SUCCESS_POLL_DELAY_MS);
-  return true;
+  setStatus('Mentési ütközés volt, újrapróbáltam a legfrissebb állapottal.', 'warning');
+  return false;
 }
 
-async function flushPendingGithubSave() {
-  if (stateRef.saveInFlight) return;
+function requestRemoteSave(options = {}) {
+  syncEditorIntoState();
+  saveLocalDraft();
 
-  const config = getConfig();
-  if (!currentConfigIsComplete(config) || !config.token) {
-    stateRef.saveRequested = false;
+  if (!currentConfigIsComplete()) {
     setSource('Helyi draft');
-    setStatus('Helyi mentés kész. GitHub szinkronhoz töltsd ki a beállításokat.', 'warning');
+    setStatus('Helyi mentés kész. Supabase URL és kulcs kell a közös mentéshez.', 'warning');
     return;
   }
+
+  stateRef.pendingSaveOptions = mergeSaveOptions(stateRef.pendingSaveOptions, options);
+  stateRef.saveRequested = true;
+  window.clearTimeout(stateRef.autosaveTimer);
+  const delay = options.immediate ? 0 : (options.delay ?? SAVE_DEBOUNCE_MS);
+  stateRef.autosaveTimer = window.setTimeout(() => {
+    stateRef.autosaveTimer = null;
+    flushPendingRemoteSave();
+  }, delay);
+}
+
+async function flushPendingRemoteSave() {
+  if (stateRef.saveInFlight) return;
+  if (!currentConfigIsComplete()) return;
 
   stateRef.saveInFlight = true;
 
   try {
-    while (stateRef.saveRequested || stateRef.hasUnsavedLocalChanges || stateRef.syncedVersion !== stateRef.localVersion) {
+    while (stateRef.saveRequested || stateRef.hasUnsavedLocalChanges || stateRef.syncedVersion < stateRef.localVersion) {
       stateRef.saveRequested = false;
-      const saveOptions = { ...stateRef.pendingSaveOptions };
-      stateRef.pendingSaveOptions = { forceBackup: false, reason: 'Mentés' };
-
-      let attempt = 0;
-      while (true) {
-        try {
-          await performGithubSave(saveOptions);
-          break;
-        } catch (error) {
-          if (isRetriableGithubError(error)) {
-            attempt += 1;
-            stateRef.saveRequested = true;
-            const now = Date.now();
-            if ((now - stateRef.lastStatusAt) > 1800) {
-              setStatus('GitHub szinkron folyamatban... újrapróbálom automatikusan.', 'warning');
-              stateRef.lastStatusAt = now;
-            }
-            await sleep(Math.min(SAVE_RETRY_BASE_MS * Math.max(1, attempt), 2000));
-            syncEditorIntoState();
-            saveLocalDraft();
-            continue;
-          }
-          setStatus(formatGithubError(error), 'error');
-          stateRef.saveRequested = false;
-          return;
-        }
+      const options = { ...stateRef.pendingSaveOptions };
+      stateRef.pendingSaveOptions = { reason: 'Mentés', triggerGithub: true, immediateGithub: false, forceBackup: false };
+      try {
+        await performRemoteSave(options);
+      } catch (error) {
+        const message = error?.message || 'Ismeretlen Supabase mentési hiba.';
+        setStatus(`Supabase mentési hiba: ${message}`, 'error');
+        stateRef.saveRequested = true;
+        await sleep(300);
       }
     }
   } finally {
     stateRef.saveInFlight = false;
-    if (stateRef.saveRequested || stateRef.hasUnsavedLocalChanges || stateRef.syncedVersion !== stateRef.localVersion) {
-      window.clearTimeout(stateRef.autosaveTimer);
-      stateRef.autosaveTimer = window.setTimeout(() => {
-        stateRef.autosaveTimer = null;
-        flushPendingGithubSave();
-      }, 0);
+    if (stateRef.saveRequested || stateRef.hasUnsavedLocalChanges || stateRef.syncedVersion < stateRef.localVersion) {
+      window.setTimeout(() => flushPendingRemoteSave(), 0);
+    }
+  }
+}
+
+function requestGithubSync(options = {}) {
+  const config = getConfig();
+  if (!config.autoGithubSync || !config.syncFunction || !currentConfigIsComplete(config) || !getSupabase()) return;
+  stateRef.pendingGithubOptions = mergeGithubOptions(stateRef.pendingGithubOptions, options);
+  stateRef.githubSyncRequested = true;
+  window.clearTimeout(stateRef.githubSyncTimer);
+  const delay = options.immediate ? 0 : GITHUB_TEXT_SYNC_DEBOUNCE_MS;
+  stateRef.githubSyncTimer = window.setTimeout(() => {
+    stateRef.githubSyncTimer = null;
+    flushGithubSync();
+  }, delay);
+}
+
+async function flushGithubSync() {
+  if (stateRef.githubSyncInFlight) return;
+  const config = getConfig();
+  const supabase = getSupabase();
+  if (!config.autoGithubSync || !config.syncFunction || !supabase) return;
+
+  stateRef.githubSyncInFlight = true;
+  try {
+    while (stateRef.githubSyncRequested) {
+      stateRef.githubSyncRequested = false;
+      const options = { ...stateRef.pendingGithubOptions };
+      stateRef.pendingGithubOptions = { reason: 'GitHub sync', immediate: false, forceBackup: false };
+      const { data, error } = await supabase.functions.invoke(config.syncFunction, {
+        body: {
+          reason: options.reason || 'Mentés',
+          force: Boolean(options.immediate),
+          forceBackup: Boolean(options.forceBackup),
+          pagePath: window.location.pathname,
+        },
+      });
+
+      if (error) {
+        setStatus(`Supabase mentve. GitHub háttérmentés hiba: ${error.message || 'ismeretlen'}`, 'warning');
+        return;
+      }
+
+      if (data?.status === 'ok') {
+        setSource('Supabase élő adat + GitHub háttérmentés');
+      } else if (data?.status === 'noop') {
+        setSource('Supabase élő adat + GitHub szinkronban');
+      } else if (data?.status === 'cooldown') {
+        setSource('Supabase élő adat + GitHub rövid késleltetéssel');
+      }
+    }
+  } finally {
+    stateRef.githubSyncInFlight = false;
+    if (stateRef.githubSyncRequested) {
+      window.setTimeout(() => flushGithubSync(), 0);
     }
   }
 }
@@ -1019,88 +980,64 @@ async function flushPendingGithubSave() {
 async function saveAll() {
   syncEditorIntoState();
   saveLocalDraft();
-  const config = getConfig();
-  if (!currentConfigIsComplete(config) || !config.token) {
-    setStatus('Helyi mentés kész. GitHub mentéshez töltsd ki a sync beállításokat.', 'warning');
+  if (!currentConfigIsComplete()) {
     setSource('Helyi draft');
+    setStatus('Helyi mentés kész. Supabase mentéshez töltsd ki a beállításokat.', 'warning');
     return;
   }
-  requestGithubSync({ immediate: true, forceBackup: true, reason: 'Kézi mentés' });
+  requestRemoteSave({ immediate: true, reason: 'Kézi mentés', triggerGithub: true, immediateGithub: true, forceBackup: true });
 }
 
 async function reloadFromRemote() {
-  const config = getConfig();
-  if (!currentConfigIsComplete(config)) {
-    setStatus('Nincs beállított GitHub repo.', 'warning');
+  if (!currentConfigIsComplete()) {
+    setStatus('Nincs beállított Supabase kapcsolat.', 'warning');
     return;
   }
   syncEditorIntoState();
-  setStatus('GitHub adat újratöltése...');
+  setStatus('Közös adat újratöltése...');
   try {
-    const remoteSnapshot = await loadRemoteSnapshot(config);
-    stateRef.state = mergeStates(remoteSnapshot.state, stateRef.state);
-    stateRef.lastKnownRemoteVersion = remoteSnapshot.version;
-    stateRef.lastCommittedFingerprint = stateFingerprint(stateRef.state);
-    stateRef.syncedVersion = stateRef.localVersion;
-    saveLocalDraft();
-    render();
-    setSource(`GitHub: ${config.owner}/${config.repo}@${config.branch}`);
-    setStatus('GitHub adat betöltve és összefésülve.', 'success');
-  } catch (error) {
-    setStatus(formatGithubError(error), 'error');
-  }
-}
-
-function startRemotePolling() {
-  stopRemotePolling();
-  const config = getConfig();
-  if (!currentConfigIsComplete(config)) return;
-  stateRef.remotePollTimer = window.setInterval(() => {
-    pollRemoteUpdates();
-  }, REMOTE_POLL_MS);
-}
-
-function stopRemotePolling() {
-  if (stateRef.remotePollTimer) {
-    window.clearInterval(stateRef.remotePollTimer);
-    stateRef.remotePollTimer = null;
-  }
-}
-
-async function pollRemoteUpdates() {
-  const config = getConfig();
-  if (!currentConfigIsComplete(config) || stateRef.saveInFlight || stateRef.saveRequested || stateRef.hasUnsavedLocalChanges) return;
-
-  if ((Date.now() - stateRef.lastSuccessfulSaveAt) < SAVE_POST_SUCCESS_POLL_DELAY_MS) return;
-
-  const isEditing = document.activeElement === els.editor || document.activeElement === els.pageTitleInput;
-  if (isEditing) return;
-
-  try {
-    const remoteSnapshot = await loadRemoteSnapshot(config);
-    if (remoteSnapshot.version && remoteSnapshot.version === stateRef.lastKnownRemoteVersion) {
+    const row = await fetchRemoteRow();
+    if (!row) {
+      setStatus('Még nincs közös adat a Supabase-ben.', 'warning');
       return;
     }
-
-    const mergedState = mergeStates(remoteSnapshot.state, stateRef.state);
-    const changed = stateFingerprint(mergedState) !== stateFingerprint(stateRef.state);
+    const mergedState = mergeStates(normalizeState(row.data), stateRef.state);
     stateRef.state = mergedState;
-    stateRef.lastKnownRemoteVersion = remoteSnapshot.version;
-    stateRef.lastCommittedFingerprint = stateFingerprint(stateRef.state);
-    stateRef.syncedVersion = stateRef.localVersion;
+    stateRef.remoteRevision = Number(row.revision || 0);
     saveLocalDraft();
+    render();
+    setSource('Supabase élő adat');
+    setStatus('A közös adat betöltve és összefésülve.', 'success');
+  } catch (error) {
+    setStatus(`Újratöltési hiba: ${error.message || 'ismeretlen'}`, 'error');
+  }
+}
 
-    if (changed) {
-      render();
-      setSource(`GitHub: ${config.owner}/${config.repo}@${config.branch}`);
-      setStatus('Közös adat frissült.', 'success');
+async function testSupabaseConnection() {
+  const config = readFormConfig();
+  if (!currentConfigIsComplete(config)) {
+    setStatus('Add meg a Supabase URL-t és az anon / publishable kulcsot.', 'warning');
+    return;
+  }
+
+  setStatus('Supabase kapcsolat teszt fut...');
+  try {
+    const supabase = createSupabaseBrowserClient(config);
+    const { error } = await supabase.from('app_state').select('id, revision').eq('id', SINGLETON_ROW_ID).maybeSingle();
+    if (error) throw error;
+
+    if (config.autoGithubSync && config.syncFunction) {
+      const probe = await supabase.functions.invoke(config.syncFunction, { body: { dryRun: true } });
+      if (probe.error) {
+        setStatus(`Supabase rendben, de a GitHub sync function hibázik: ${probe.error.message || 'ismeretlen'}`, 'warning');
+      } else {
+        setStatus('Supabase és GitHub sync function rendben.', 'success');
+      }
+    } else {
+      setStatus('Supabase kapcsolat rendben.', 'success');
     }
   } catch (error) {
-    const now = Date.now();
-    if ((now - stateRef.lastStatusAt) > 12000) {
-      setStatus(`GitHub figyelés hiba: ${formatGithubError(error)}`, 'warning');
-      stateRef.lastStatusAt = now;
-    }
+    setStatus(`Kapcsolati hiba: ${error.message || 'ismeretlen'}`, 'error');
   }
 }
 
@@ -1114,80 +1051,171 @@ async function loadStaticState() {
   }
 }
 
+function subscribeRealtime() {
+  const supabase = getSupabase();
+  if (!supabase) return;
+
+  if (stateRef.realtimeChannel) {
+    supabase.removeChannel(stateRef.realtimeChannel);
+    stateRef.realtimeChannel = null;
+  }
+
+  stateRef.realtimeChannel = supabase
+    .channel(`app-state-${PATH_SCOPE}`)
+    .on(
+      'postgres_changes',
+      { event: '*', schema: 'public', table: 'app_state', filter: `id=eq.${SINGLETON_ROW_ID}` },
+      (payload) => {
+        const nextRow = payload.new;
+        if (!nextRow) return;
+        const nextRevision = Number(nextRow.revision || 0);
+        if (nextRevision <= stateRef.remoteRevision) return;
+
+        stateRef.remoteRevision = nextRevision;
+        stateRef.lastRemoteEditorId = nextRow.editor_id || null;
+
+        if (nextRow.editor_id === stateRef.clientId) {
+          setSource('Supabase élő adat');
+          return;
+        }
+
+        const remoteState = normalizeState(nextRow.data);
+        const currentFingerprint = stateFingerprint(stateRef.state);
+        const mergedState = (stateRef.hasUnsavedLocalChanges || stateRef.saveInFlight)
+          ? mergeStates(remoteState, stateRef.state)
+          : remoteState;
+        const nextFingerprint = stateFingerprint(mergedState);
+        stateRef.state = mergedState;
+        saveLocalDraft();
+
+        if (nextFingerprint !== currentFingerprint && document.activeElement !== els.editor) {
+          render();
+        }
+
+        if (stateRef.hasUnsavedLocalChanges) {
+          requestRemoteSave({ immediate: true, reason: 'Realtime összefésülés', triggerGithub: true, immediateGithub: false, forceBackup: false });
+        }
+
+        setSource('Supabase élő adat');
+        setStatus('Közös adat frissült.', 'success');
+      }
+    )
+    .subscribe((status) => {
+      if (status === 'SUBSCRIBED') {
+        setSource('Supabase élő adat');
+      }
+    });
+}
+
 async function bootstrap() {
   const config = getConfig();
   populateConfigForm(config);
 
+  const staticState = await loadStaticState();
+  const localDraft = normalizeState(loadLocalDraft() || createEmptyState());
   let loaded = false;
 
   if (config.preferRemote && currentConfigIsComplete(config)) {
     try {
-      const remoteSnapshot = await loadRemoteSnapshot(config);
-      const localDraft = normalizeState(loadLocalDraft(config));
-      stateRef.state = mergeStates(remoteSnapshot.state, localDraft);
-      stateRef.lastKnownRemoteVersion = remoteSnapshot.version;
-      stateRef.lastCommittedFingerprint = stateFingerprint(stateRef.state);
-      setSource(`GitHub: ${config.owner}/${config.repo}@${config.branch}`);
-      setStatus('GitHub adat betöltve.', 'success');
-      loaded = true;
+      getSupabase();
+      const remoteRow = await ensureRemoteRow(mergeStates(staticState, localDraft));
+      const mergedState = mergeStates(normalizeState(remoteRow.data), localDraft);
+      stateRef.state = mergedState;
+      stateRef.remoteRevision = Number(remoteRow.revision || 0);
+      stateRef.syncedVersion = stateRef.localVersion;
       saveLocalDraft();
-    } catch (error) {
-      setStatus(`GitHub betöltés sikertelen, fallback megy: ${formatGithubError(error)}`, 'warning');
-    }
-  }
-
-  if (!loaded) {
-    const localDraft = loadLocalDraft(config);
-    if (localDraft) {
-      stateRef.state = normalizeState(localDraft);
-      stateRef.lastCommittedFingerprint = stateFingerprint(stateRef.state);
-      setSource('Helyi draft');
-      setStatus('Helyi mentés betöltve.', 'success');
+      setSource('Supabase élő adat');
+      setStatus('Supabase adat betöltve.', 'success');
+      subscribeRealtime();
       loaded = true;
+
+      const remoteFingerprint = stateFingerprint(normalizeState(remoteRow.data));
+      const mergedFingerprint = stateFingerprint(mergedState);
+      if (mergedFingerprint !== remoteFingerprint) {
+        stateRef.hasUnsavedLocalChanges = true;
+        requestRemoteSave({ immediate: true, reason: 'Első összehangolás', triggerGithub: true, immediateGithub: true, forceBackup: true });
+      }
+    } catch (error) {
+      setStatus(`Supabase betöltés sikertelen, fallback megy: ${error.message || 'ismeretlen'}`, 'warning');
+      resetSupabaseClient();
     }
   }
 
+  if (!loaded && loadLocalDraft()) {
+    stateRef.state = localDraft;
+    setSource('Helyi draft');
+    setStatus('Helyi mentés betöltve.', 'success');
+    loaded = true;
+  }
+
   if (!loaded) {
-    stateRef.state = await loadStaticState();
-    stateRef.lastCommittedFingerprint = stateFingerprint(stateRef.state);
+    stateRef.state = staticState;
     setSource('Statikus fájl');
     setStatus('Kezdőadat betöltve.', 'success');
   }
 
   ensureSelectionValid();
   render();
-  startRemotePolling();
-}
-
-function formatGithubError(error) {
-  if (!error) return 'Ismeretlen hiba.';
-  const status = error.status ? `${error.status}` : 'ismeretlen';
-  const rawMessage = typeof error.data === 'object' ? error.data?.message : error.message;
-  const message = rawMessage || error.message || 'Ismeretlen GitHub hiba.';
-  return `GitHub hiba: ${status} – ${message}`;
 }
 
 function applyHeading() {
   document.execCommand('formatBlock', false, 'h2');
   syncEditorIntoState();
-  requestGithubSync({ immediate: true, reason: 'Formázás mentése' });
+  requestRemoteSave({ immediate: true, reason: 'Formázás mentése', triggerGithub: true, immediateGithub: true, forceBackup: false });
 }
 
 function applyQuote() {
   document.execCommand('formatBlock', false, 'blockquote');
   syncEditorIntoState();
-  requestGithubSync({ immediate: true, reason: 'Formázás mentése' });
+  requestRemoteSave({ immediate: true, reason: 'Formázás mentése', triggerGithub: true, immediateGithub: true, forceBackup: false });
 }
 
-function insertImageFromFile(file) {
+async function uploadImageFile(file) {
+  if (!file) return null;
+  const config = getConfig();
+  const supabase = getSupabase();
+  if (!supabase || !currentConfigIsComplete(config)) {
+    return readFileAsDataUrl(file);
+  }
+
+  const subjectId = stateRef.selectedSubjectId || 'general';
+  const pageId = stateRef.selectedPageId || 'draft';
+  const cleanName = (file.name || 'kep.png').replace(/[^a-zA-Z0-9._-]/g, '_');
+  const filePath = `${subjectId}/${pageId}/${Date.now()}-${cleanName}`;
+
+  const { error } = await supabase.storage
+    .from(config.imageBucket)
+    .upload(filePath, file, { upsert: false, cacheControl: '3600' });
+
+  if (error) {
+    throw error;
+  }
+
+  const { data } = supabase.storage.from(config.imageBucket).getPublicUrl(filePath);
+  return data.publicUrl;
+}
+
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(new Error('A kép nem olvasható.'));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function insertImageFromFile(file) {
   if (!file) return;
-  const reader = new FileReader();
-  reader.onload = () => {
-    insertImageAtCaret(reader.result);
+  try {
+    setStatus('Kép feltöltése folyamatban...');
+    const src = await uploadImageFile(file);
+    insertImageAtCaret(src);
     syncEditorIntoState();
-    requestGithubSync({ immediate: true, reason: 'Kép mentése' });
-  };
-  reader.readAsDataURL(file);
+    requestRemoteSave({ immediate: true, reason: 'Kép mentése', triggerGithub: true, immediateGithub: true, forceBackup: false });
+    setStatus('Kép beszúrva.', 'success');
+  } catch (error) {
+    setStatus(`Képfeltöltési hiba: ${error.message || 'ismeretlen'}`, 'error');
+  }
 }
 
 function insertImageAtCaret(src) {
@@ -1239,7 +1267,7 @@ function setImageAlignment(align) {
   stateRef.selectedImage.classList.remove('align-left', 'align-center', 'align-right');
   stateRef.selectedImage.classList.add(`align-${align}`);
   syncEditorIntoState();
-  requestGithubSync({ immediate: true, reason: 'Kép igazítás mentése' });
+  requestRemoteSave({ immediate: true, reason: 'Kép igazítás mentése', triggerGithub: true, immediateGithub: true, forceBackup: false });
 }
 
 function removeSelectedImage() {
@@ -1249,7 +1277,11 @@ function removeSelectedImage() {
   hideImageTools();
   nextFocus?.focus?.();
   syncEditorIntoState();
-  requestGithubSync({ immediate: true, reason: 'Kép törlése' });
+  requestRemoteSave({ immediate: true, reason: 'Kép törlése', triggerGithub: true, immediateGithub: true, forceBackup: false });
+}
+
+function sleep(ms) {
+  return new Promise(resolve => window.setTimeout(resolve, ms));
 }
 
 function bindEvents() {
@@ -1258,21 +1290,22 @@ function bindEvents() {
   document.getElementById('saveBtn').addEventListener('click', saveAll);
   document.getElementById('reloadRemoteBtn').addEventListener('click', reloadFromRemote);
   document.getElementById('clearLocalBtn').addEventListener('click', async () => {
-    const ok = await confirmModal('Helyi cache törlése', 'Biztosan törölni akarod a helyi cache-t? A GitHubban lévő adatok nem törlődnek.');
+    const ok = await confirmModal('Helyi cache törlése', 'Biztosan törölni akarod a helyi cache-t? A Supabase-ben és GitHubban lévő adatok nem törlődnek.');
     if (!ok) return;
     clearLocalDraft();
     setStatus('Helyi cache törölve.', 'success');
-    setSource('GitHub / statikus forrás');
+    setSource('Supabase / statikus forrás');
   });
 
-  document.getElementById('saveGithubConfigBtn').addEventListener('click', () => {
+  document.getElementById('saveSupabaseConfigBtn').addEventListener('click', () => {
     const config = saveConfig(readFormConfig());
     populateConfigForm(config);
+    resetSupabaseClient();
     saveLocalDraft(stateRef.state);
-    startRemotePolling();
-    setStatus('GitHub beállítás elmentve.', 'success');
+    bootstrap();
+    setStatus('Supabase beállítás elmentve.', 'success');
   });
-  document.getElementById('testGithubBtn').addEventListener('click', githubTestConnection);
+  document.getElementById('testSupabaseBtn').addEventListener('click', testSupabaseConnection);
   document.getElementById('toggleSettingsBtn').addEventListener('click', () => {
     els.settingsPanel.classList.toggle('hidden');
   });
@@ -1301,7 +1334,7 @@ function bindEvents() {
       els.editor.focus();
       document.execCommand(btn.dataset.cmd, false, null);
       syncEditorIntoState();
-      requestGithubSync({ immediate: true, reason: 'Formázás mentése' });
+      requestRemoteSave({ immediate: true, reason: 'Formázás mentése', triggerGithub: true, immediateGithub: true, forceBackup: false });
     });
   });
 
@@ -1329,14 +1362,7 @@ function bindEvents() {
     syncEditorIntoState();
     saveLocalDraft();
   });
-
-  document.addEventListener('visibilitychange', () => {
-    if (!document.hidden) {
-      pollRemoteUpdates();
-    }
-  });
 }
-
 
 bindEvents();
 bootstrap();

@@ -1,912 +1,1056 @@
-const STORAGE_KEY = "erettsegi-site-data-v1";
-const CONFIG_KEY = "erettsegi-site-github-config-v1";
-
-const state = {
-  data: { subjects: [], meta: { version: 1, lastSavedAt: null } },
-  selectedSubjectId: null,
-  selectedPageId: null,
-  selectedImageFigure: null,
-  modalSubmitHandler: null,
-  confirmHandler: null,
-  githubConfig: loadGithubConfig(),
-  saveTimer: null,
-  syncTimer: null,
-  remoteLoaded: false,
-};
+const APP_VERSION = 2;
+const STATIC_DATA_PATH = 'data/content.json';
+const GITHUB_DATA_PATH = 'data/content.json';
+const CONFIG_KEY = 'erettsegi_config_current_v2';
+const LOCAL_FALLBACK_SCOPE = 'local-only';
 
 const els = {
-  subjectsList: document.getElementById("subjectsList"),
-  subjectSearch: document.getElementById("subjectSearch"),
-  pagesList: document.getElementById("pagesList"),
-  heroTitle: document.getElementById("heroTitle"),
-  heroSubtitle: document.getElementById("heroSubtitle"),
-  addSubjectBtn: document.getElementById("addSubjectBtn"),
-  addPageBtn: document.getElementById("addPageBtn"),
-  renameCurrentPageBtn: document.getElementById("renameCurrentPageBtn"),
-  deletePageBtn: document.getElementById("deletePageBtn"),
-  saveNowBtn: document.getElementById("saveNowBtn"),
-  settingsBtn: document.getElementById("settingsBtn"),
-  syncStatus: document.getElementById("syncStatus"),
-  syncDot: document.getElementById("syncDot"),
-  pageTitleInput: document.getElementById("pageTitleInput"),
-  pageMeta: document.getElementById("pageMeta"),
-  editor: document.getElementById("editor"),
-  editorPlaceholder: document.getElementById("editorPlaceholder"),
-  editorToolbar: document.getElementById("editorToolbar"),
-  insertImageBtn: document.getElementById("insertImageBtn"),
-  imageInput: document.getElementById("imageInput"),
-  insertDividerBtn: document.getElementById("insertDividerBtn"),
-  clearFormattingBtn: document.getElementById("clearFormattingBtn"),
-  imageControls: document.getElementById("imageControls"),
-  removeSelectedImageBtn: document.getElementById("removeSelectedImageBtn"),
-  modalBackdrop: document.getElementById("modalBackdrop"),
-  itemModal: document.getElementById("itemModal"),
-  itemModalTitle: document.getElementById("itemModalTitle"),
-  itemModalInput: document.getElementById("itemModalInput"),
-  itemModalSubmit: document.getElementById("itemModalSubmit"),
-  confirmModal: document.getElementById("confirmModal"),
-  confirmTitle: document.getElementById("confirmTitle"),
-  confirmMessage: document.getElementById("confirmMessage"),
-  confirmSubmit: document.getElementById("confirmSubmit"),
-  settingsModal: document.getElementById("settingsModal"),
-  cfgOwner: document.getElementById("cfgOwner"),
-  cfgRepo: document.getElementById("cfgRepo"),
-  cfgBranch: document.getElementById("cfgBranch"),
-  cfgToken: document.getElementById("cfgToken"),
-  cfgAutoSync: document.getElementById("cfgAutoSync"),
-  saveSettingsBtn: document.getElementById("saveSettingsBtn"),
-  testSyncBtn: document.getElementById("testSyncBtn"),
-  toastContainer: document.getElementById("toastContainer"),
+  subjectList: document.getElementById('subjectList'),
+  pageList: document.getElementById('pageList'),
+  currentSubjectTitle: document.getElementById('currentSubjectTitle'),
+  currentSubjectMeta: document.getElementById('currentSubjectMeta'),
+  pageTitleInput: document.getElementById('pageTitleInput'),
+  pageInfo: document.getElementById('pageInfo'),
+  editor: document.getElementById('editor'),
+  imageTools: document.getElementById('imageTools'),
+  statusText: document.getElementById('statusText'),
+  sourceText: document.getElementById('sourceText'),
+  ghOwner: document.getElementById('ghOwner'),
+  ghRepo: document.getElementById('ghRepo'),
+  ghBranch: document.getElementById('ghBranch'),
+  ghToken: document.getElementById('ghToken'),
+  preferRemoteToggle: document.getElementById('preferRemoteToggle'),
+  imageInput: document.getElementById('imageInput'),
+  modalBackdrop: document.getElementById('modalBackdrop'),
+  modalTitle: document.getElementById('modalTitle'),
+  modalMessage: document.getElementById('modalMessage'),
+  modalCancel: document.getElementById('modalCancel'),
+  modalConfirm: document.getElementById('modalConfirm'),
+  settingsPanel: document.getElementById('settingsPanel'),
 };
 
-init();
+const stateRef = {
+  state: createEmptyState(),
+  selectedSubjectId: null,
+  selectedPageId: null,
+  selectedImage: null,
+  githubSaveQueue: Promise.resolve(),
+  autosaveTimer: null,
+  modalResolver: null,
+  loadedSource: 'Kezdés',
+};
 
-async function init() {
-  bindEvents();
-  hydrateSettingsForm();
-  await loadInitialData();
-  ensureSelection();
-  render();
-}
-
-function bindEvents() {
-  els.addSubjectBtn.addEventListener("click", () => openItemModal("Új tantárgy", "pl. Történelem", (value) => {
-    addSubject(value);
-  }));
-
-  els.addPageBtn.addEventListener("click", () => {
-    const subject = getSelectedSubject();
-    if (!subject) {
-      toast("Előbb válassz vagy hozz létre egy tantárgyat.", "warning");
-      return;
-    }
-    openItemModal("Új oldal", "pl. 1. tétel", (value) => addPage(subject.id, value));
-  });
-
-  els.renameCurrentPageBtn.addEventListener("click", () => {
-    const page = getSelectedPage();
-    if (!page) {
-      toast("Nincs kiválasztott oldal.", "warning");
-      return;
-    }
-    openItemModal("Oldal átnevezése", page.title, (value) => {
-      page.title = value;
-      page.updatedAt = nowIso();
-      markDirty("Oldal átnevezve.");
-    }, page.title);
-  });
-
-  els.deletePageBtn.addEventListener("click", () => {
-    const subject = getSelectedSubject();
-    const page = getSelectedPage();
-    if (!subject || !page) {
-      toast("Nincs kiválasztott oldal.", "warning");
-      return;
-    }
-    openConfirmModal(
-      "Oldal törlése",
-      `Biztos törölni akarod ezt az oldalt: „${page.title}”?`,
-      () => deletePage(subject.id, page.id)
-    );
-  });
-
-  els.saveNowBtn.addEventListener("click", async () => {
-    persistLocal();
-    toast("Helyi mentés kész.", "success");
-    if (isGithubConfigured()) {
-      await syncToGithub({ showToast: true });
-    }
-  });
-
-  els.settingsBtn.addEventListener("click", () => openModal(els.settingsModal));
-
-  els.pageTitleInput.addEventListener("input", () => {
-    const page = getSelectedPage();
-    if (!page) return;
-    page.title = els.pageTitleInput.value.trimStart();
-    page.updatedAt = nowIso();
-    scheduleLocalSave();
-    renderHeaderBits();
-    renderPages();
-  });
-
-  els.editor.addEventListener("input", () => {
-    saveCurrentEditorToState();
-    scheduleLocalSave();
-  });
-
-  els.editor.addEventListener("paste", handlePaste);
-  els.editor.addEventListener("drop", handleDrop);
-  els.editor.addEventListener("dragover", (e) => e.preventDefault());
-
-  els.editor.addEventListener("click", (event) => {
-    const figure = event.target.closest("figure.page-figure");
-    selectImageFigure(figure || null);
-  });
-
-  document.addEventListener("click", (event) => {
-    const clickedInModal = event.target.closest(".modal-card");
-    const clickedImage = event.target.closest("figure.page-figure");
-    const clickedControls = event.target.closest("#imageControls");
-    if (!clickedImage && !clickedControls && !clickedInModal) {
-      selectImageFigure(null);
-    }
-  });
-
-  els.editorToolbar.addEventListener("click", (event) => {
-    const button = event.target.closest("button");
-    if (!button) return;
-    const command = button.dataset.cmd;
-    const block = button.dataset.block;
-    const align = button.dataset.align;
-
-    focusEditor();
-    if (command) {
-      document.execCommand(command, false, null);
-    } else if (block) {
-      document.execCommand("formatBlock", false, block);
-    } else if (align) {
-      document.execCommand(`justify${align[0].toUpperCase()}${align.slice(1)}`);
-    }
-    saveCurrentEditorToState();
-    renderEditorMeta();
-  });
-
-  els.insertDividerBtn.addEventListener("click", () => {
-    focusEditor();
-    insertHtmlAtCursor("<hr>");
-    saveCurrentEditorToState();
-  });
-
-  els.clearFormattingBtn.addEventListener("click", () => {
-    focusEditor();
-    document.execCommand("removeFormat", false, null);
-    saveCurrentEditorToState();
-  });
-
-  els.insertImageBtn.addEventListener("click", () => els.imageInput.click());
-  els.imageInput.addEventListener("change", async (event) => {
-    const [file] = event.target.files || [];
-    if (!file) return;
-    await insertImageFile(file);
-    event.target.value = "";
-  });
-
-  els.imageControls.addEventListener("click", (event) => {
-    const button = event.target.closest("button");
-    if (!button || !state.selectedImageFigure) return;
-    const width = button.dataset.imageWidth;
-    const align = button.dataset.imageAlign;
-    if (width) {
-      state.selectedImageFigure.dataset.width = width;
-    }
-    if (align) {
-      state.selectedImageFigure.dataset.align = align;
-    }
-    saveCurrentEditorToState();
-  });
-
-  els.removeSelectedImageBtn.addEventListener("click", () => {
-    if (!state.selectedImageFigure) return;
-    state.selectedImageFigure.remove();
-    selectImageFigure(null);
-    saveCurrentEditorToState();
-  });
-
-  els.itemModalSubmit.addEventListener("click", () => {
-    const value = els.itemModalInput.value.trim();
-    if (!value) {
-      toast("Adj meg egy nevet.", "warning");
-      return;
-    }
-    if (typeof state.modalSubmitHandler === "function") {
-      state.modalSubmitHandler(value);
-    }
-    closeModal(els.itemModal);
-  });
-
-  els.confirmSubmit.addEventListener("click", () => {
-    if (typeof state.confirmHandler === "function") {
-      state.confirmHandler();
-    }
-    closeModal(els.confirmModal);
-  });
-
-  document.querySelectorAll("[data-close-modal]").forEach((button) => {
-    button.addEventListener("click", () => closeModal(document.getElementById(button.dataset.closeModal)));
-  });
-
-  els.modalBackdrop.addEventListener("click", closeAllModals);
-  document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape") closeAllModals();
-  });
-
-  els.subjectSearch.addEventListener("input", renderSubjects);
-
-  els.saveSettingsBtn.addEventListener("click", () => {
-    state.githubConfig = {
-      owner: els.cfgOwner.value.trim(),
-      repo: els.cfgRepo.value.trim(),
-      branch: els.cfgBranch.value.trim() || "main",
-      token: els.cfgToken.value.trim(),
-      autoSync: els.cfgAutoSync.checked,
-    };
-    localStorage.setItem(CONFIG_KEY, JSON.stringify(state.githubConfig));
-    closeModal(els.settingsModal);
-    updateSyncIndicator();
-    toast("GitHub sync beállítások mentve.", "success");
-  });
-
-  els.testSyncBtn.addEventListener("click", async () => {
-    const tempConfig = {
-      owner: els.cfgOwner.value.trim(),
-      repo: els.cfgRepo.value.trim(),
-      branch: els.cfgBranch.value.trim() || "main",
-      token: els.cfgToken.value.trim(),
-      autoSync: els.cfgAutoSync.checked,
-    };
-    if (!isGithubConfigured(tempConfig)) {
-      toast("A teszthez tölts ki minden GitHub mezőt.", "warning");
-      return;
-    }
-    try {
-      await githubRequest(tempConfig, `/repos/${tempConfig.owner}/${tempConfig.repo}`);
-      toast("Kapcsolat rendben, a repository elérhető.", "success");
-    } catch (error) {
-      toast(`Kapcsolati hiba: ${error.message}`, "error");
-    }
-  });
-}
-
-async function loadInitialData() {
-  const localData = loadLocalData();
-  let remoteData = null;
-  try {
-    const response = await fetch(`./data/content.json?ts=${Date.now()}`, { cache: "no-store" });
-    if (response.ok) remoteData = await response.json();
-  } catch (error) {
-    console.warn("A repository adatfájl nem tölthető be.", error);
-  }
-
-  state.data = pickNewestData(localData, remoteData) || {
+function createEmptyState() {
+  return {
+    version: APP_VERSION,
+    updatedAt: new Date(0).toISOString(),
     subjects: [],
-    meta: { version: 1, lastSavedAt: nowIso() },
+    deletedSubjects: [],
+    deletedPages: [],
   };
-  state.remoteLoaded = true;
 }
 
-function pickNewestData(localData, remoteData) {
-  const localTs = new Date(localData?.meta?.lastSavedAt || 0).getTime();
-  const remoteTs = new Date(remoteData?.meta?.lastSavedAt || 0).getTime();
-  if (!localData && !remoteData) return null;
-  return localTs >= remoteTs ? (localData || remoteData) : remoteData;
-}
-
-function loadLocalData() {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? JSON.parse(raw) : null;
-  } catch (error) {
-    console.error("Helyi adat betöltési hiba.", error);
-    return null;
-  }
-}
-
-function persistLocal() {
-  state.data.meta.lastSavedAt = nowIso();
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state.data));
-  updateSyncIndicator();
-}
-
-function scheduleLocalSave(message) {
-  window.clearTimeout(state.saveTimer);
-  state.saveTimer = window.setTimeout(() => {
-    persistLocal();
-    if (message) toast(message, "success");
-  }, 250);
-
-  if (state.githubConfig.autoSync && isGithubConfigured()) {
-    window.clearTimeout(state.syncTimer);
-    state.syncTimer = window.setTimeout(() => {
-      syncToGithub({ showToast: false });
-    }, 1200);
-  }
-}
-
-function markDirty(message) {
-  persistLocal();
-  render();
-  if (message) toast(message, "success");
-  if (state.githubConfig.autoSync && isGithubConfigured()) {
-    syncToGithub({ showToast: false });
-  }
-}
-
-function render() {
-  renderSubjects();
-  renderPages();
-  renderHeaderBits();
-  renderEditor();
-  updateSyncIndicator();
-}
-
-function renderSubjects() {
-  const query = els.subjectSearch.value.trim().toLowerCase();
-  const subjects = state.data.subjects.filter((subject) => {
-    if (!query) return true;
-    return subject.name.toLowerCase().includes(query);
-  });
-
-  if (!subjects.length) {
-    els.subjectsList.innerHTML = `<div class="empty-note">Nincs találat. Hozz létre új tantárgyat.</div>`;
-    return;
-  }
-
-  els.subjectsList.innerHTML = subjects.map((subject) => {
-    const active = subject.id === state.selectedSubjectId ? "active" : "";
-    return `
-      <article class="subject-card ${active}" data-subject-id="${subject.id}">
-        <div class="subject-main">
-          <div class="subject-row">
-            <div>
-              <div class="subject-name">${escapeHtml(subject.name)}</div>
-              <div class="subject-count small">${subject.pages.length} oldal</div>
-            </div>
-          </div>
-        </div>
-        <div class="subject-actions">
-          <button class="ghost-btn" data-action="rename-subject" data-subject-id="${subject.id}">Átnevezés</button>
-          <button class="danger-btn" data-action="delete-subject" data-subject-id="${subject.id}">Törlés</button>
-        </div>
-      </article>
-    `;
-  }).join("");
-
-  els.subjectsList.querySelectorAll(".subject-main").forEach((element) => {
-    element.addEventListener("click", () => {
-      const card = element.closest("[data-subject-id]");
-      selectSubject(card.dataset.subjectId);
-    });
-  });
-
-  els.subjectsList.querySelectorAll("[data-action='rename-subject']").forEach((button) => {
-    button.addEventListener("click", (event) => {
-      event.stopPropagation();
-      const subject = getSubjectById(button.dataset.subjectId);
-      if (!subject) return;
-      openItemModal("Tantárgy átnevezése", subject.name, (value) => {
-        subject.name = value;
-        subject.updatedAt = nowIso();
-        markDirty("Tantárgy átnevezve.");
-      }, subject.name);
-    });
-  });
-
-  els.subjectsList.querySelectorAll("[data-action='delete-subject']").forEach((button) => {
-    button.addEventListener("click", (event) => {
-      event.stopPropagation();
-      const subject = getSubjectById(button.dataset.subjectId);
-      if (!subject) return;
-      openConfirmModal(
-        "Tantárgy törlése",
-        `Biztos törölni akarod ezt a tantárgyat: „${subject.name}”? Az összes aloldal is törlődik.`,
-        () => deleteSubject(subject.id)
-      );
-    });
-  });
-}
-
-function renderPages() {
-  const subject = getSelectedSubject();
-  if (!subject) {
-    els.pagesList.innerHTML = `<div class="empty-note">Nincs kiválasztott tantárgy.</div>`;
-    return;
-  }
-
-  if (!subject.pages.length) {
-    els.pagesList.innerHTML = `<div class="empty-note">Ehhez a tantárgyhoz még nincs oldal. Hozz létre egyet.</div>`;
-    return;
-  }
-
-  els.pagesList.innerHTML = subject.pages.map((page) => {
-    const active = page.id === state.selectedPageId ? "active" : "";
-    return `
-      <article class="page-chip ${active}">
-        <div class="page-chip-main" data-page-id="${page.id}">
-          <span class="page-chip-name">${escapeHtml(page.title || "Névtelen oldal")}</span>
-          <span class="page-chip-count small">Frissítve: ${formatDate(page.updatedAt)}</span>
-        </div>
-        <div class="page-chip-actions">
-          <button class="ghost-btn" data-action="rename-page" data-page-id="${page.id}">Átnevezés</button>
-          <button class="danger-btn" data-action="delete-page" data-page-id="${page.id}">Törlés</button>
-        </div>
-      </article>
-    `;
-  }).join("");
-
-  els.pagesList.querySelectorAll(".page-chip-main").forEach((element) => {
-    element.addEventListener("click", () => {
-      selectPage(element.dataset.pageId);
-    });
-  });
-
-  els.pagesList.querySelectorAll("[data-action='rename-page']").forEach((button) => {
-    button.addEventListener("click", () => {
-      const page = getPageById(button.dataset.pageId);
-      if (!page) return;
-      openItemModal("Oldal átnevezése", page.title, (value) => {
-        page.title = value;
-        page.updatedAt = nowIso();
-        markDirty("Oldal átnevezve.");
-      }, page.title);
-    });
-  });
-
-  els.pagesList.querySelectorAll("[data-action='delete-page']").forEach((button) => {
-    button.addEventListener("click", () => {
-      const subject = getSelectedSubject();
-      const page = getPageById(button.dataset.pageId);
-      if (!subject || !page) return;
-      openConfirmModal(
-        "Oldal törlése",
-        `Biztos törölni akarod ezt az oldalt: „${page.title}”?`,
-        () => deletePage(subject.id, page.id)
-      );
-    });
-  });
-}
-
-function renderHeaderBits() {
-  const subject = getSelectedSubject();
-  const page = getSelectedPage();
-  els.heroTitle.textContent = subject ? subject.name : "Válassz egy tantárgyat";
-  els.heroSubtitle.textContent = subject
-    ? `${subject.pages.length} oldal • gyorsan szerkeszthető, helyben mentődik, és opcionálisan GitHubra is szinkronizálható.`
-    : "Készíts oldalakat, írj jegyzeteket, szúrj be képeket, és mentsd el mindent.";
-
-  els.pageTitleInput.value = page?.title || "";
-  renderEditorMeta();
-}
-
-function renderEditorMeta() {
-  const page = getSelectedPage();
-  if (!page) {
-    els.pageMeta.textContent = "Még nincs kiválasztott oldal.";
-    return;
-  }
-  els.pageMeta.textContent = `Létrehozva: ${formatDate(page.createdAt)} • Utolsó módosítás: ${formatDate(page.updatedAt)}`;
-}
-
-function renderEditor() {
-  const page = getSelectedPage();
-  const hasPage = Boolean(page);
-  els.editor.classList.toggle("hidden", !hasPage);
-  els.editorPlaceholder.classList.toggle("hidden", hasPage);
-  els.deletePageBtn.disabled = !hasPage;
-  els.renameCurrentPageBtn.disabled = !hasPage;
-  els.pageTitleInput.disabled = !hasPage;
-
-  if (!hasPage) {
-    els.editor.innerHTML = "";
-    selectImageFigure(null);
-    return;
-  }
-
-  if (els.editor.innerHTML !== page.content) {
-    els.editor.innerHTML = page.content || "";
-  }
-  selectImageFigure(null);
-}
-
-function addSubject(name) {
-  const subject = {
-    id: uid("subj"),
-    name,
-    pages: [],
-    createdAt: nowIso(),
-    updatedAt: nowIso(),
-  };
-  state.data.subjects.push(subject);
-  state.selectedSubjectId = subject.id;
-  state.selectedPageId = null;
-  markDirty("Tantárgy létrehozva.");
-}
-
-function deleteSubject(subjectId) {
-  state.data.subjects = state.data.subjects.filter((subject) => subject.id !== subjectId);
-  if (state.selectedSubjectId === subjectId) {
-    state.selectedSubjectId = state.data.subjects[0]?.id || null;
-    state.selectedPageId = getSelectedSubject()?.pages[0]?.id || null;
-  }
-  markDirty("Tantárgy törölve.");
-}
-
-function addPage(subjectId, title) {
-  const subject = getSubjectById(subjectId);
-  if (!subject) return;
-  const page = {
-    id: uid("page"),
-    title,
-    content: "<p></p>",
-    createdAt: nowIso(),
-    updatedAt: nowIso(),
-  };
-  subject.pages.push(page);
-  subject.updatedAt = nowIso();
-  state.selectedSubjectId = subject.id;
-  state.selectedPageId = page.id;
-  markDirty("Oldal létrehozva.");
-  focusEditorSoon();
-}
-
-function deletePage(subjectId, pageId) {
-  const subject = getSubjectById(subjectId);
-  if (!subject) return;
-  subject.pages = subject.pages.filter((page) => page.id !== pageId);
-  subject.updatedAt = nowIso();
-  if (state.selectedPageId === pageId) {
-    state.selectedPageId = subject.pages[0]?.id || null;
-  }
-  markDirty("Oldal törölve.");
-}
-
-function selectSubject(subjectId) {
-  saveCurrentEditorToState();
-  state.selectedSubjectId = subjectId;
-  const subject = getSubjectById(subjectId);
-  state.selectedPageId = subject?.pages[0]?.id || null;
-  render();
-}
-
-function selectPage(pageId) {
-  saveCurrentEditorToState();
-  state.selectedPageId = pageId;
-  render();
-  focusEditorSoon();
-}
-
-function ensureSelection() {
-  if (!state.selectedSubjectId) {
-    state.selectedSubjectId = state.data.subjects[0]?.id || null;
-  }
-  const subject = getSelectedSubject();
-  if (subject && !subject.pages.some((page) => page.id === state.selectedPageId)) {
-    state.selectedPageId = subject.pages[0]?.id || null;
-  }
-}
-
-function saveCurrentEditorToState() {
-  const page = getSelectedPage();
-  if (!page) return;
-  page.content = sanitizeEditorHtml(els.editor.innerHTML);
-  page.updatedAt = nowIso();
-  renderEditorMeta();
-}
-
-function sanitizeEditorHtml(html) {
-  return html
-    .replace(/<script[\s\S]*?>[\s\S]*?<\/script>/gi, "")
-    .replace(/ on\w+="[^"]*"/g, "")
-    .replace(/ on\w+='[^']*'/g, "");
-}
-
-function handlePaste(event) {
-  const items = Array.from(event.clipboardData?.items || []);
-  const imageItem = items.find((item) => item.type.startsWith("image/"));
-  if (!imageItem) return;
-  event.preventDefault();
-  const file = imageItem.getAsFile();
-  if (file) insertImageFile(file);
-}
-
-function handleDrop(event) {
-  event.preventDefault();
-  const file = Array.from(event.dataTransfer?.files || []).find((item) => item.type.startsWith("image/"));
-  if (file) insertImageFile(file);
-}
-
-async function insertImageFile(file) {
-  const dataUrl = await readFileAsDataUrl(file);
-  focusEditor();
-  const figureHtml = `
-    <figure class="page-figure" data-width="75" data-align="center">
-      <img src="${dataUrl}" alt="Beillesztett kép" />
-    </figure>
-    <p></p>
-  `;
-  insertHtmlAtCursor(figureHtml);
-  saveCurrentEditorToState();
-  toast("Kép beszúrva.", "success");
-}
-
-function insertHtmlAtCursor(html) {
-  const selection = window.getSelection();
-  if (!selection || !selection.rangeCount) {
-    els.editor.insertAdjacentHTML("beforeend", html);
-    return;
-  }
-  const range = selection.getRangeAt(0);
-  range.deleteContents();
-  const temp = document.createElement("div");
-  temp.innerHTML = html;
-  const fragment = document.createDocumentFragment();
-  let node;
-  let lastNode;
-  while ((node = temp.firstChild)) {
-    lastNode = fragment.appendChild(node);
-  }
-  range.insertNode(fragment);
-  if (lastNode) {
-    range.setStartAfter(lastNode);
-    range.setEndAfter(lastNode);
-    selection.removeAllRanges();
-    selection.addRange(range);
-  }
-}
-
-function selectImageFigure(figure) {
-  if (state.selectedImageFigure) {
-    state.selectedImageFigure.classList.remove("selected");
-  }
-  state.selectedImageFigure = figure;
-  if (figure) {
-    figure.classList.add("selected");
-    els.imageControls.classList.remove("hidden");
-  } else {
-    els.imageControls.classList.add("hidden");
-  }
-}
-
-function openItemModal(title, placeholder, onSubmit, initialValue = "") {
-  state.modalSubmitHandler = onSubmit;
-  els.itemModalTitle.textContent = title;
-  els.itemModalInput.placeholder = placeholder;
-  els.itemModalInput.value = initialValue;
-  openModal(els.itemModal);
-  window.setTimeout(() => els.itemModalInput.focus(), 20);
-}
-
-function openConfirmModal(title, message, onConfirm) {
-  state.confirmHandler = onConfirm;
-  els.confirmTitle.textContent = title;
-  els.confirmMessage.textContent = message;
-  openModal(els.confirmModal);
-}
-
-function openModal(modal) {
-  els.modalBackdrop.classList.remove("hidden");
-  modal.classList.remove("hidden");
-  modal.setAttribute("aria-hidden", "false");
-}
-
-function closeModal(modal) {
-  modal.classList.add("hidden");
-  modal.setAttribute("aria-hidden", "true");
-  if (document.querySelectorAll(".modal:not(.hidden)").length === 0) {
-    els.modalBackdrop.classList.add("hidden");
-  }
-}
-
-function closeAllModals() {
-  document.querySelectorAll(".modal").forEach((modal) => {
-    modal.classList.add("hidden");
-    modal.setAttribute("aria-hidden", "true");
-  });
-  els.modalBackdrop.classList.add("hidden");
-}
-
-function hydrateSettingsForm() {
-  els.cfgOwner.value = state.githubConfig.owner || "";
-  els.cfgRepo.value = state.githubConfig.repo || "";
-  els.cfgBranch.value = state.githubConfig.branch || "main";
-  els.cfgToken.value = state.githubConfig.token || "";
-  els.cfgAutoSync.checked = Boolean(state.githubConfig.autoSync);
-}
-
-async function syncToGithub({ showToast = true } = {}) {
-  if (!isGithubConfigured()) {
-    if (showToast) toast("A GitHub sync nincs teljesen beállítva.", "warning");
-    return;
-  }
-
-  try {
-    setSyncState("warning", "GitHub mentés folyamatban...");
-    const contentPath = "data/content.json";
-    const backupPath = `backup/${timestampForFilename()}.json`;
-    const serialized = JSON.stringify(state.data, null, 2);
-
-    await upsertRepoFile(contentPath, serialized, `Frissítés: ${contentPath}`);
-    await createBackupFile(backupPath, serialized);
-
-    setSyncState("success", "GitHub sync aktív");
-    if (showToast) toast("GitHub mentés és backup kész.", "success");
-  } catch (error) {
-    console.error(error);
-    setSyncState("error", "GitHub sync hiba");
-    if (showToast) toast(`GitHub mentési hiba: ${error.message}`, "error");
-  }
-}
-
-async function createBackupFile(path, content) {
-  const existing = await getFileShaIfExists(path);
-  if (existing) {
-    return upsertRepoFile(path, content, `Backup frissítés: ${path}`);
-  }
-  return upsertRepoFile(path, content, `Backup létrehozás: ${path}`);
-}
-
-async function upsertRepoFile(path, content, message) {
-  const sha = await getFileShaIfExists(path);
-  const payload = {
-    message,
-    content: btoa(unescape(encodeURIComponent(content))),
-    branch: state.githubConfig.branch,
-  };
-  if (sha) payload.sha = sha;
-
-  await githubRequest(state.githubConfig, `/repos/${state.githubConfig.owner}/${state.githubConfig.repo}/contents/${path}`, {
-    method: "PUT",
-    body: JSON.stringify(payload),
-  });
-}
-
-async function getFileShaIfExists(path) {
-  try {
-    const response = await githubRequest(state.githubConfig, `/repos/${state.githubConfig.owner}/${state.githubConfig.repo}/contents/${path}?ref=${encodeURIComponent(state.githubConfig.branch)}`);
-    return response.sha || null;
-  } catch (error) {
-    if (String(error.message).includes("404")) return null;
-    throw error;
-  }
-}
-
-async function githubRequest(config, path, options = {}) {
-  const response = await fetch(`https://api.github.com${path}`, {
-    ...options,
-    headers: {
-      "Accept": "application/vnd.github+json",
-      "Authorization": `Bearer ${config.token}`,
-      "X-GitHub-Api-Version": "2022-11-28",
-      ...(options.headers || {}),
-    },
-  });
-
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`${response.status} ${response.statusText} – ${text}`);
-  }
-
-  if (response.status === 204) return null;
-  return response.json();
-}
-
-function updateSyncIndicator() {
-  if (isGithubConfigured()) {
-    setSyncState("success", "GitHub sync beállítva");
-  } else {
-    setSyncState("success", "Helyi mentés aktív");
-  }
-}
-
-function setSyncState(type, message) {
-  els.syncDot.className = "sync-dot";
-  if (type === "warning") els.syncDot.classList.add("warning");
-  if (type === "error") els.syncDot.classList.add("error");
-  els.syncStatus.textContent = message;
-}
-
-function getSelectedSubject() {
-  return state.data.subjects.find((subject) => subject.id === state.selectedSubjectId) || null;
-}
-
-function getSelectedPage() {
-  const subject = getSelectedSubject();
-  return subject?.pages.find((page) => page.id === state.selectedPageId) || null;
-}
-
-function getSubjectById(id) {
-  return state.data.subjects.find((subject) => subject.id === id) || null;
-}
-
-function getPageById(id) {
-  for (const subject of state.data.subjects) {
-    const page = subject.pages.find((item) => item.id === id);
-    if (page) return page;
-  }
-  return null;
-}
-
-function loadGithubConfig() {
-  try {
-    return JSON.parse(localStorage.getItem(CONFIG_KEY)) || { branch: "main", autoSync: false };
-  } catch {
-    return { branch: "main", autoSync: false };
-  }
-}
-
-function isGithubConfigured(config = state.githubConfig) {
-  return Boolean(config?.owner && config?.repo && config?.branch && config?.token);
-}
-
-function toast(message, type = "success") {
-  const item = document.createElement("div");
-  item.className = `toast ${type}`;
-  item.textContent = message;
-  els.toastContainer.appendChild(item);
-  window.setTimeout(() => {
-    item.style.opacity = "0";
-    item.style.transform = "translateY(8px)";
-  }, 2600);
-  window.setTimeout(() => item.remove(), 3200);
-}
-
-function uid(prefix) {
-  return `${prefix}-${Math.random().toString(36).slice(2, 10)}-${Date.now().toString(36)}`;
+function uid(prefix = 'id') {
+  if (window.crypto?.randomUUID) return `${prefix}_${crypto.randomUUID()}`;
+  return `${prefix}_${Date.now()}_${Math.random().toString(16).slice(2)}`;
 }
 
 function nowIso() {
   return new Date().toISOString();
 }
 
-function timestampForFilename() {
-  const date = new Date();
-  const pad = (n) => String(n).padStart(2, "0");
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}_${pad(date.getHours())}-${pad(date.getMinutes())}-${pad(date.getSeconds())}`;
+function safeJsonParse(text, fallback = null) {
+  try { return JSON.parse(text); } catch { return fallback; }
 }
 
-function formatDate(value) {
-  if (!value) return "–";
-  return new Intl.DateTimeFormat("hu-HU", {
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(new Date(value));
+function deepClone(obj) {
+  return JSON.parse(JSON.stringify(obj));
 }
 
-function readFileAsDataUrl(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result);
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
+function getTimestampValue(value) {
+  const time = Date.parse(value || 0);
+  return Number.isFinite(time) ? time : 0;
+}
+
+function chooseNewer(a, b) {
+  if (!a) return b ? deepClone(b) : null;
+  if (!b) return a ? deepClone(a) : null;
+  return getTimestampValue(a.updatedAt) >= getTimestampValue(b.updatedAt) ? deepClone(a) : deepClone(b);
+}
+
+function toRepoScope(config = getConfig()) {
+  const owner = (config.owner || '').trim();
+  const repo = (config.repo || '').trim();
+  if (!owner || !repo) return LOCAL_FALLBACK_SCOPE;
+  return `${owner}__${repo}`.toLowerCase();
+}
+
+function stateKey(scope = toRepoScope()) {
+  return `erettsegi_state_${scope}_v2`;
+}
+
+function tokenKey(scope = toRepoScope()) {
+  return `erettsegi_token_${scope}_v2`;
+}
+
+function setStatus(message, tone = 'normal') {
+  els.statusText.textContent = message;
+  els.statusText.style.color = tone === 'error'
+    ? 'var(--danger)'
+    : tone === 'success'
+      ? 'var(--success)'
+      : tone === 'warning'
+        ? 'var(--warning)'
+        : '';
+}
+
+function setSource(text) {
+  stateRef.loadedSource = text;
+  els.sourceText.textContent = text;
+}
+
+function normalizeState(raw) {
+  const base = createEmptyState();
+  if (!raw || typeof raw !== 'object') return base;
+
+  const normalized = {
+    version: APP_VERSION,
+    updatedAt: raw.updatedAt || nowIso(),
+    subjects: [],
+    deletedSubjects: Array.isArray(raw.deletedSubjects) ? raw.deletedSubjects : [],
+    deletedPages: Array.isArray(raw.deletedPages) ? raw.deletedPages : [],
+  };
+
+  const subjects = Array.isArray(raw.subjects) ? raw.subjects : [];
+  normalized.subjects = subjects.map((subject, subjectIndex) => {
+    const subjectCreated = subject.createdAt || subject.updatedAt || nowIso();
+    const pages = Array.isArray(subject.pages) ? subject.pages : [];
+    return {
+      id: subject.id || uid(`subject_${subjectIndex}`),
+      title: subject.title || `Tantárgy ${subjectIndex + 1}`,
+      createdAt: subjectCreated,
+      updatedAt: subject.updatedAt || subjectCreated,
+      pages: pages.map((page, pageIndex) => {
+        const pageCreated = page.createdAt || page.updatedAt || nowIso();
+        return {
+          id: page.id || uid(`page_${pageIndex}`),
+          title: page.title || `Oldal ${pageIndex + 1}`,
+          content: typeof page.content === 'string' ? page.content : '',
+          createdAt: pageCreated,
+          updatedAt: page.updatedAt || pageCreated,
+        };
+      }),
+    };
   });
+
+  normalized.deletedSubjects = normalized.deletedSubjects
+    .filter(item => item && item.id)
+    .map(item => ({ id: item.id, updatedAt: item.updatedAt || nowIso() }));
+
+  normalized.deletedPages = normalized.deletedPages
+    .filter(item => item && item.id)
+    .map(item => ({ id: item.id, subjectId: item.subjectId || null, updatedAt: item.updatedAt || nowIso() }));
+
+  normalized.subjects.sort((a, b) => getTimestampValue(a.createdAt) - getTimestampValue(b.createdAt));
+  normalized.subjects.forEach(subject => {
+    subject.pages.sort((a, b) => getTimestampValue(a.createdAt) - getTimestampValue(b.createdAt));
+  });
+
+  return normalized;
 }
 
-function focusEditor() {
-  els.editor.focus();
+function mergeStates(remoteRaw, localRaw) {
+  const remote = normalizeState(remoteRaw);
+  const local = normalizeState(localRaw);
+
+  const deletedSubjectMap = new Map();
+  const deletedPageMap = new Map();
+
+  for (const item of [...remote.deletedSubjects, ...local.deletedSubjects]) {
+    const existing = deletedSubjectMap.get(item.id);
+    if (!existing || getTimestampValue(item.updatedAt) > getTimestampValue(existing.updatedAt)) {
+      deletedSubjectMap.set(item.id, deepClone(item));
+    }
+  }
+
+  for (const item of [...remote.deletedPages, ...local.deletedPages]) {
+    const existing = deletedPageMap.get(item.id);
+    if (!existing || getTimestampValue(item.updatedAt) > getTimestampValue(existing.updatedAt)) {
+      deletedPageMap.set(item.id, deepClone(item));
+    }
+  }
+
+  const remoteSubjects = new Map(remote.subjects.map(subject => [subject.id, subject]));
+  const localSubjects = new Map(local.subjects.map(subject => [subject.id, subject]));
+  const subjectIds = new Set([...remoteSubjects.keys(), ...localSubjects.keys()]);
+  const mergedSubjects = [];
+
+  for (const subjectId of subjectIds) {
+    const remoteSubject = remoteSubjects.get(subjectId);
+    const localSubject = localSubjects.get(subjectId);
+    const deletedSubject = deletedSubjectMap.get(subjectId);
+    const chosenSubject = chooseNewer(remoteSubject, localSubject);
+    if (!chosenSubject) continue;
+    if (deletedSubject && getTimestampValue(deletedSubject.updatedAt) >= getTimestampValue(chosenSubject.updatedAt)) continue;
+
+    const remotePages = new Map((remoteSubject?.pages || []).map(page => [page.id, page]));
+    const localPages = new Map((localSubject?.pages || []).map(page => [page.id, page]));
+    const pageIds = new Set([...remotePages.keys(), ...localPages.keys()]);
+    const mergedPages = [];
+
+    for (const pageId of pageIds) {
+      const deletedPage = deletedPageMap.get(pageId);
+      const chosenPage = chooseNewer(remotePages.get(pageId), localPages.get(pageId));
+      if (!chosenPage) continue;
+      if (deletedPage && getTimestampValue(deletedPage.updatedAt) >= getTimestampValue(chosenPage.updatedAt)) continue;
+      mergedPages.push(chosenPage);
+    }
+
+    mergedPages.sort((a, b) => getTimestampValue(a.createdAt) - getTimestampValue(b.createdAt));
+    chosenSubject.pages = mergedPages;
+    mergedSubjects.push(chosenSubject);
+  }
+
+  mergedSubjects.sort((a, b) => getTimestampValue(a.createdAt) - getTimestampValue(b.createdAt));
+
+  const mergedState = {
+    version: APP_VERSION,
+    updatedAt: [remote.updatedAt, local.updatedAt, nowIso()].sort((a, b) => getTimestampValue(a) - getTimestampValue(b)).at(-1),
+    subjects: mergedSubjects,
+    deletedSubjects: [...deletedSubjectMap.values()].sort((a, b) => getTimestampValue(a.updatedAt) - getTimestampValue(b.updatedAt)),
+    deletedPages: [...deletedPageMap.values()].sort((a, b) => getTimestampValue(a.updatedAt) - getTimestampValue(b.updatedAt)),
+  };
+
+  return mergedState;
+}
+
+function getConfig() {
+  const raw = safeJsonParse(localStorage.getItem(CONFIG_KEY), {}) || {};
+  const config = {
+    owner: raw.owner || '',
+    repo: raw.repo || '',
+    branch: raw.branch || 'main',
+    preferRemote: raw.preferRemote !== false,
+  };
+  const scope = toRepoScope(config);
+  config.token = localStorage.getItem(tokenKey(scope)) || '';
+  return config;
+}
+
+function saveConfig(config) {
+  const baseConfig = {
+    owner: (config.owner || '').trim(),
+    repo: (config.repo || '').trim(),
+    branch: (config.branch || 'main').trim() || 'main',
+    preferRemote: Boolean(config.preferRemote),
+  };
+
+  localStorage.setItem(CONFIG_KEY, JSON.stringify(baseConfig));
+  const scope = toRepoScope(baseConfig);
+  if (config.token) {
+    localStorage.setItem(tokenKey(scope), config.token.trim());
+  }
+  return { ...baseConfig, token: config.token?.trim() || '' };
+}
+
+function readFormConfig() {
+  return {
+    owner: els.ghOwner.value,
+    repo: els.ghRepo.value,
+    branch: els.ghBranch.value || 'main',
+    token: els.ghToken.value,
+    preferRemote: els.preferRemoteToggle.checked,
+  };
+}
+
+function populateConfigForm(config) {
+  els.ghOwner.value = config.owner || '';
+  els.ghRepo.value = config.repo || '';
+  els.ghBranch.value = config.branch || 'main';
+  els.ghToken.value = config.token || '';
+  els.preferRemoteToggle.checked = config.preferRemote !== false;
+}
+
+function saveLocalDraft(state = stateRef.state) {
+  const scope = toRepoScope(getConfig());
+  localStorage.setItem(stateKey(scope), JSON.stringify(state));
+}
+
+function loadLocalDraft(config = getConfig()) {
+  return safeJsonParse(localStorage.getItem(stateKey(toRepoScope(config))), null);
+}
+
+function clearLocalDraft(config = getConfig()) {
+  localStorage.removeItem(stateKey(toRepoScope(config)));
+}
+
+function getSelectedSubject() {
+  return stateRef.state.subjects.find(subject => subject.id === stateRef.selectedSubjectId) || null;
+}
+
+function getSelectedPage() {
+  const subject = getSelectedSubject();
+  return subject?.pages.find(page => page.id === stateRef.selectedPageId) || null;
+}
+
+function markStateUpdated() {
+  stateRef.state.updatedAt = nowIso();
+}
+
+function ensureSelectionValid() {
+  const subject = getSelectedSubject();
+  if (!subject) {
+    stateRef.selectedSubjectId = stateRef.state.subjects[0]?.id || null;
+  }
+  const currentSubject = getSelectedSubject();
+  if (!currentSubject) {
+    stateRef.selectedPageId = null;
+    return;
+  }
+  const hasSelectedPage = currentSubject.pages.some(page => page.id === stateRef.selectedPageId);
+  if (!hasSelectedPage) {
+    stateRef.selectedPageId = currentSubject.pages[0]?.id || null;
+  }
+}
+
+function render() {
+  ensureSelectionValid();
+  renderSubjects();
+  renderPages();
+  renderEditor();
+}
+
+function renderSubjects() {
+  els.subjectList.innerHTML = '';
+  if (!stateRef.state.subjects.length) {
+    const empty = document.createElement('div');
+    empty.className = 'empty-state-box card';
+    empty.innerHTML = '<p>Még nincs tantárgy. Hozz létre egyet.</p>';
+    els.subjectList.appendChild(empty);
+    return;
+  }
+
+  for (const subject of stateRef.state.subjects) {
+    const card = document.createElement('div');
+    card.className = `item-card ${subject.id === stateRef.selectedSubjectId ? 'active' : ''}`;
+
+    const main = document.createElement('div');
+    main.className = 'item-main';
+
+    const selectBtn = document.createElement('button');
+    selectBtn.innerHTML = `<div class="item-title">${escapeHtml(subject.title)}</div><div class="item-meta">${subject.pages.length} oldal</div>`;
+    selectBtn.addEventListener('click', () => {
+      syncEditorIntoState();
+      stateRef.selectedSubjectId = subject.id;
+      stateRef.selectedPageId = subject.pages[0]?.id || null;
+      render();
+    });
+
+    const actions = document.createElement('div');
+    actions.className = 'item-actions';
+
+    const renameBtn = iconButton('Átnevez');
+    renameBtn.addEventListener('click', () => renameSubject(subject.id));
+
+    const deleteBtn = iconButton('Töröl');
+    deleteBtn.addEventListener('click', () => deleteSubject(subject.id));
+
+    actions.append(renameBtn, deleteBtn);
+    main.append(selectBtn, actions);
+    card.appendChild(main);
+    els.subjectList.appendChild(card);
+  }
+}
+
+function renderPages() {
+  els.pageList.innerHTML = '';
+  const subject = getSelectedSubject();
+  if (!subject) {
+    els.pageList.classList.add('empty-state-box');
+    els.pageList.innerHTML = '<p>Nincs kiválasztott tantárgy.</p>';
+    els.currentSubjectTitle.textContent = 'Válassz tantárgyat';
+    els.currentSubjectMeta.textContent = 'Itt tudod kezelni az oldalakat és a tartalmat.';
+    return;
+  }
+
+  els.pageList.classList.remove('empty-state-box');
+  els.currentSubjectTitle.textContent = subject.title;
+  els.currentSubjectMeta.textContent = `${subject.pages.length} oldal · utolsó módosítás: ${formatDate(subject.updatedAt)}`;
+
+  if (!subject.pages.length) {
+    els.pageList.classList.add('empty-state-box');
+    els.pageList.innerHTML = '<p>Még nincs oldal ebben a tantárgyban.</p>';
+    return;
+  }
+
+  for (const page of subject.pages) {
+    const card = document.createElement('div');
+    card.className = `item-card ${page.id === stateRef.selectedPageId ? 'active' : ''}`;
+
+    const main = document.createElement('div');
+    main.className = 'item-main';
+    const selectBtn = document.createElement('button');
+    selectBtn.innerHTML = `<div class="item-title">${escapeHtml(page.title)}</div><div class="item-meta">${formatDate(page.updatedAt)}</div>`;
+    selectBtn.addEventListener('click', () => {
+      syncEditorIntoState();
+      stateRef.selectedPageId = page.id;
+      render();
+    });
+
+    const actions = document.createElement('div');
+    actions.className = 'item-actions';
+    const renameBtn = iconButton('Átnevez');
+    renameBtn.addEventListener('click', () => renamePage(page.id));
+    const deleteBtn = iconButton('Töröl');
+    deleteBtn.addEventListener('click', () => deletePage(page.id));
+    actions.append(renameBtn, deleteBtn);
+
+    main.append(selectBtn, actions);
+    card.appendChild(main);
+    els.pageList.appendChild(card);
+  }
+}
+
+function renderEditor() {
+  const page = getSelectedPage();
+  if (!page) {
+    els.pageTitleInput.value = '';
+    els.pageTitleInput.disabled = true;
+    els.editor.innerHTML = '';
+    els.editor.setAttribute('contenteditable', 'false');
+    els.pageInfo.textContent = 'Válassz vagy hozz létre egy oldalt.';
+    hideImageTools();
+    return;
+  }
+
+  els.pageTitleInput.disabled = false;
+  els.pageTitleInput.value = page.title;
+  els.pageInfo.textContent = `Utolsó módosítás: ${formatDate(page.updatedAt)}`;
+  if (els.editor.innerHTML !== page.content) {
+    els.editor.innerHTML = page.content || '';
+  }
+  els.editor.setAttribute('contenteditable', 'true');
+  hideImageTools();
+}
+
+function iconButton(label) {
+  const button = document.createElement('button');
+  button.className = 'icon-btn';
+  button.textContent = label;
+  return button;
+}
+
+function formatDate(iso) {
+  if (!iso) return 'ismeretlen';
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return 'ismeretlen';
+  return date.toLocaleString('hu-HU');
+}
+
+function escapeHtml(text) {
+  return String(text)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
+function addSubject() {
+  syncEditorIntoState();
+  const title = window.prompt('Tantárgy neve:', 'Új tantárgy');
+  if (!title || !title.trim()) return;
+  const timestamp = nowIso();
+  const subject = {
+    id: uid('subject'),
+    title: title.trim(),
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    pages: [],
+  };
+  stateRef.state.subjects.push(subject);
+  markStateUpdated();
+  stateRef.selectedSubjectId = subject.id;
+  stateRef.selectedPageId = null;
+  saveLocalDraft();
+  render();
+  setStatus('Tantárgy létrehozva.', 'success');
+}
+
+function renameSubject(subjectId) {
+  const subject = stateRef.state.subjects.find(item => item.id === subjectId);
+  if (!subject) return;
+  const nextTitle = window.prompt('Új tantárgynév:', subject.title);
+  if (!nextTitle || !nextTitle.trim()) return;
+  subject.title = nextTitle.trim();
+  subject.updatedAt = nowIso();
+  markStateUpdated();
+  saveLocalDraft();
+  render();
+  setStatus('Tantárgy átnevezve.', 'success');
+}
+
+async function deleteSubject(subjectId) {
+  const subject = stateRef.state.subjects.find(item => item.id === subjectId);
+  if (!subject) return;
+  const ok = await confirmModal('Tantárgy törlése', `Biztosan törölni akarod ezt a tantárgyat és az összes oldalát?\n\n${subject.title}`);
+  if (!ok) return;
+
+  const deletedAt = nowIso();
+  stateRef.state.deletedSubjects.push({ id: subject.id, updatedAt: deletedAt });
+  for (const page of subject.pages) {
+    stateRef.state.deletedPages.push({ id: page.id, subjectId: subject.id, updatedAt: deletedAt });
+  }
+
+  stateRef.state.subjects = stateRef.state.subjects.filter(item => item.id !== subjectId);
+  markStateUpdated();
+  if (stateRef.selectedSubjectId === subjectId) {
+    stateRef.selectedSubjectId = stateRef.state.subjects[0]?.id || null;
+    stateRef.selectedPageId = null;
+  }
+  saveLocalDraft();
+  render();
+  setStatus('Tantárgy törölve.', 'success');
+}
+
+function addPage() {
+  const subject = getSelectedSubject();
+  if (!subject) {
+    setStatus('Előbb válassz ki egy tantárgyat.', 'warning');
+    return;
+  }
+  syncEditorIntoState();
+  const title = window.prompt('Oldal címe:', 'Új oldal');
+  if (!title || !title.trim()) return;
+  const timestamp = nowIso();
+  const page = {
+    id: uid('page'),
+    title: title.trim(),
+    content: '',
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  };
+  subject.pages.push(page);
+  subject.updatedAt = timestamp;
+  markStateUpdated();
+  stateRef.selectedPageId = page.id;
+  saveLocalDraft();
+  render();
+  focusEditorSoon();
+  setStatus('Oldal létrehozva.', 'success');
+}
+
+function renamePage(pageId) {
+  const page = getSelectedSubject()?.pages.find(item => item.id === pageId);
+  if (!page) return;
+  const nextTitle = window.prompt('Új oldalcím:', page.title);
+  if (!nextTitle || !nextTitle.trim()) return;
+  page.title = nextTitle.trim();
+  page.updatedAt = nowIso();
+  getSelectedSubject().updatedAt = page.updatedAt;
+  markStateUpdated();
+  saveLocalDraft();
+  render();
+  setStatus('Oldal átnevezve.', 'success');
+}
+
+async function deletePage(pageId) {
+  const subject = getSelectedSubject();
+  const page = subject?.pages.find(item => item.id === pageId);
+  if (!subject || !page) return;
+  const ok = await confirmModal('Oldal törlése', `Biztosan törölni akarod ezt az oldalt?\n\n${page.title}`);
+  if (!ok) return;
+
+  const deletedAt = nowIso();
+  stateRef.state.deletedPages.push({ id: page.id, subjectId: subject.id, updatedAt: deletedAt });
+  subject.pages = subject.pages.filter(item => item.id !== pageId);
+  subject.updatedAt = deletedAt;
+  markStateUpdated();
+  if (stateRef.selectedPageId === pageId) {
+    stateRef.selectedPageId = subject.pages[0]?.id || null;
+  }
+  saveLocalDraft();
+  render();
+  setStatus('Oldal törölve.', 'success');
+}
+
+function syncEditorIntoState() {
+  const page = getSelectedPage();
+  const subject = getSelectedSubject();
+  if (!page || !subject) return;
+  const newTitle = els.pageTitleInput.value.trim() || 'Névtelen oldal';
+  const newContent = els.editor.innerHTML;
+  let changed = false;
+  if (page.title !== newTitle) {
+    page.title = newTitle;
+    changed = true;
+  }
+  if (page.content !== newContent) {
+    page.content = newContent;
+    changed = true;
+  }
+  if (changed) {
+    const timestamp = nowIso();
+    page.updatedAt = timestamp;
+    subject.updatedAt = timestamp;
+    markStateUpdated();
+    saveLocalDraft();
+    els.pageInfo.textContent = `Utolsó módosítás: ${formatDate(page.updatedAt)}`;
+  }
+}
+
+function queueLocalAutosave() {
+  window.clearTimeout(stateRef.autosaveTimer);
+  stateRef.autosaveTimer = window.setTimeout(() => {
+    syncEditorIntoState();
+    setStatus('Helyi piszkozat frissítve. GitHubra még nincs kimentve.', 'warning');
+  }, 350);
 }
 
 function focusEditorSoon() {
-  window.setTimeout(() => els.editor.focus(), 40);
+  window.setTimeout(() => els.editor.focus(), 30);
 }
 
-function escapeHtml(value) {
-  return String(value)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/\"/g, "&quot;")
-    .replace(/'/g, "&#39;");
+function confirmModal(title, message) {
+  return new Promise(resolve => {
+    els.modalTitle.textContent = title;
+    els.modalMessage.textContent = message;
+    els.modalBackdrop.classList.remove('hidden');
+    stateRef.modalResolver = resolve;
+  });
 }
+
+function closeModal(result) {
+  els.modalBackdrop.classList.add('hidden');
+  if (typeof stateRef.modalResolver === 'function') {
+    stateRef.modalResolver(result);
+    stateRef.modalResolver = null;
+  }
+}
+
+function currentConfigIsComplete(config = getConfig()) {
+  return Boolean(config.owner && config.repo && config.branch);
+}
+
+function githubHeaders(config, json = true) {
+  const headers = {
+    'Accept': 'application/vnd.github+json',
+    'X-GitHub-Api-Version': '2022-11-28',
+  };
+  if (config.token) headers.Authorization = `Bearer ${config.token}`;
+  if (json) headers['Content-Type'] = 'application/json';
+  return headers;
+}
+
+async function githubRequest(url, config, options = {}) {
+  const response = await fetch(url, {
+    ...options,
+    headers: {
+      ...githubHeaders(config, options.body !== undefined),
+      ...(options.headers || {}),
+    },
+  });
+
+  const text = await response.text();
+  const data = safeJsonParse(text, text);
+  if (!response.ok) {
+    const error = new Error(`GitHub hiba: ${response.status}`);
+    error.status = response.status;
+    error.data = data;
+    throw error;
+  }
+  return data;
+}
+
+function buildRepoApiBase(config) {
+  return `https://api.github.com/repos/${encodeURIComponent(config.owner)}/${encodeURIComponent(config.repo)}`;
+}
+
+function utf8ToBase64(text) {
+  return btoa(unescape(encodeURIComponent(text)));
+}
+
+function base64ToUtf8(base64) {
+  return decodeURIComponent(escape(atob(base64.replace(/\n/g, ''))));
+}
+
+async function githubTestConnection() {
+  const config = readFormConfig();
+  if (!currentConfigIsComplete(config)) {
+    setStatus('Add meg az owner / repo / branch adatokat is.', 'warning');
+    return;
+  }
+  setStatus('Kapcsolat teszt fut...');
+  try {
+    const url = buildRepoApiBase(config);
+    const repoInfo = await githubRequest(url, config, { method: 'GET' });
+    saveConfig(config);
+    setStatus(`Kapcsolat rendben: ${repoInfo.full_name}`, 'success');
+    setSource(`GitHub repo: ${repoInfo.full_name}`);
+  } catch (error) {
+    setStatus(formatGithubError(error), 'error');
+  }
+}
+
+async function githubGetFile(path, config) {
+  const url = `${buildRepoApiBase(config)}/contents/${path}?ref=${encodeURIComponent(config.branch)}`;
+  try {
+    const data = await githubRequest(url, config, { method: 'GET' });
+    return {
+      exists: true,
+      sha: data.sha,
+      content: data.content ? base64ToUtf8(data.content) : '',
+      raw: data,
+    };
+  } catch (error) {
+    if (error.status === 404) {
+      return { exists: false, sha: null, content: '', raw: null };
+    }
+    throw error;
+  }
+}
+
+async function githubPutFile(path, contentText, config, sha = null, message = 'Update file') {
+  const url = `${buildRepoApiBase(config)}/contents/${path}`;
+  const payload = {
+    message,
+    content: utf8ToBase64(contentText),
+    branch: config.branch,
+  };
+  if (sha) payload.sha = sha;
+  return githubRequest(url, config, {
+    method: 'PUT',
+    body: JSON.stringify(payload),
+  });
+}
+
+async function loadRemoteState(config = getConfig()) {
+  const remoteFile = await githubGetFile(GITHUB_DATA_PATH, config);
+  if (!remoteFile.exists) return createEmptyState();
+  return normalizeState(safeJsonParse(remoteFile.content, createEmptyState()));
+}
+
+async function performGithubSave() {
+  const config = getConfig();
+  if (!currentConfigIsComplete(config) || !config.token) {
+    setStatus('GitHub mentéshez owner / repo / branch / token is kell.', 'warning');
+    return;
+  }
+
+  syncEditorIntoState();
+  saveLocalDraft();
+  setStatus('GitHub mentés folyamatban...');
+
+  let attempt = 0;
+  while (attempt < 2) {
+    attempt += 1;
+    try {
+      const remoteFile = await githubGetFile(GITHUB_DATA_PATH, config);
+      const remoteState = remoteFile.exists
+        ? normalizeState(safeJsonParse(remoteFile.content, createEmptyState()))
+        : createEmptyState();
+
+      const mergedState = mergeStates(remoteState, stateRef.state);
+      mergedState.updatedAt = nowIso();
+      const contentText = JSON.stringify(mergedState, null, 2);
+
+      await githubPutFile(
+        GITHUB_DATA_PATH,
+        contentText,
+        config,
+        remoteFile.sha,
+        `Mentés: ${new Date().toLocaleString('hu-HU')}`,
+      );
+
+      const backupPath = `backup/content-${new Date().toISOString().replace(/[:.]/g, '-')}-${Math.random().toString(16).slice(2, 8)}.json`;
+      const backupPayload = JSON.stringify({
+        savedAt: nowIso(),
+        source: 'browser-app',
+        data: mergedState,
+      }, null, 2);
+      await githubPutFile(
+        backupPath,
+        backupPayload,
+        config,
+        null,
+        `Backup: ${new Date().toLocaleString('hu-HU')}`,
+      );
+
+      stateRef.state = mergedState;
+      saveLocalDraft();
+      setSource(`GitHub: ${config.owner}/${config.repo}@${config.branch}`);
+      setStatus('GitHub mentés kész. A közös adat frissült.', 'success');
+      render();
+      return;
+    } catch (error) {
+      if (error.status === 409 && attempt < 2) {
+        setStatus('Ütközés volt, friss remote állapottal újrapróbálom...', 'warning');
+        continue;
+      }
+      throw error;
+    }
+  }
+}
+
+function enqueueGithubSave() {
+  const task = stateRef.githubSaveQueue.then(() => performGithubSave());
+  stateRef.githubSaveQueue = task.catch(() => {});
+  return task.catch(error => {
+    setStatus(formatGithubError(error), 'error');
+    throw error;
+  });
+}
+
+async function saveAll() {
+  syncEditorIntoState();
+  saveLocalDraft();
+  const config = getConfig();
+  if (!currentConfigIsComplete(config) || !config.token) {
+    setStatus('Helyi mentés kész. GitHub mentéshez töltsd ki a sync beállításokat.', 'warning');
+    setSource('Helyi draft');
+    return;
+  }
+  try {
+    await enqueueGithubSave();
+  } catch {
+    // státuszt az enqueueGithubSave már kezeli
+  }
+}
+
+async function reloadFromRemote() {
+  const config = getConfig();
+  if (!currentConfigIsComplete(config)) {
+    setStatus('Nincs beállított GitHub repo.', 'warning');
+    return;
+  }
+  syncEditorIntoState();
+  setStatus('GitHub adat újratöltése...');
+  try {
+    const remoteState = await loadRemoteState(config);
+    stateRef.state = mergeStates(remoteState, stateRef.state);
+    saveLocalDraft();
+    render();
+    setSource(`GitHub: ${config.owner}/${config.repo}@${config.branch}`);
+    setStatus('GitHub adat betöltve és összefésülve.', 'success');
+  } catch (error) {
+    setStatus(formatGithubError(error), 'error');
+  }
+}
+
+async function loadStaticState() {
+  try {
+    const response = await fetch(`${STATIC_DATA_PATH}?v=${Date.now()}`);
+    if (!response.ok) throw new Error('A statikus data/content.json nem tölthető be.');
+    return normalizeState(await response.json());
+  } catch {
+    return createEmptyState();
+  }
+}
+
+async function bootstrap() {
+  const config = getConfig();
+  populateConfigForm(config);
+
+  let loaded = false;
+
+  if (config.preferRemote && currentConfigIsComplete(config)) {
+    try {
+      const remoteState = await loadRemoteState(config);
+      const localDraft = normalizeState(loadLocalDraft(config));
+      stateRef.state = mergeStates(remoteState, localDraft);
+      setSource(`GitHub: ${config.owner}/${config.repo}@${config.branch}`);
+      setStatus('GitHub adat betöltve.', 'success');
+      loaded = true;
+      saveLocalDraft();
+    } catch (error) {
+      setStatus(`GitHub betöltés sikertelen, fallback megy: ${formatGithubError(error)}`, 'warning');
+    }
+  }
+
+  if (!loaded) {
+    const localDraft = loadLocalDraft(config);
+    if (localDraft) {
+      stateRef.state = normalizeState(localDraft);
+      setSource('Helyi draft');
+      setStatus('Helyi mentés betöltve.', 'success');
+      loaded = true;
+    }
+  }
+
+  if (!loaded) {
+    stateRef.state = await loadStaticState();
+    setSource('Statikus fájl');
+    setStatus('Kezdőadat betöltve.', 'success');
+  }
+
+  ensureSelectionValid();
+  render();
+}
+
+function formatGithubError(error) {
+  if (!error) return 'Ismeretlen hiba.';
+  const status = error.status ? `${error.status}` : 'ismeretlen';
+  const rawMessage = typeof error.data === 'object' ? error.data?.message : error.message;
+  const message = rawMessage || error.message || 'Ismeretlen GitHub hiba.';
+  return `GitHub hiba: ${status} – ${message}`;
+}
+
+function applyHeading() {
+  document.execCommand('formatBlock', false, 'h2');
+  syncEditorIntoState();
+}
+
+function applyQuote() {
+  document.execCommand('formatBlock', false, 'blockquote');
+  syncEditorIntoState();
+}
+
+function insertImageFromFile(file) {
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    insertImageAtCaret(reader.result);
+    syncEditorIntoState();
+  };
+  reader.readAsDataURL(file);
+}
+
+function insertImageAtCaret(src) {
+  els.editor.focus();
+  const img = document.createElement('img');
+  img.src = src;
+  img.alt = 'Beillesztett kép';
+  img.className = 'align-center';
+  insertNodeAtCaret(img);
+  selectImage(img);
+}
+
+function insertNodeAtCaret(node) {
+  const selection = window.getSelection();
+  if (!selection || !selection.rangeCount) {
+    els.editor.appendChild(node);
+    return;
+  }
+  const range = selection.getRangeAt(0);
+  range.deleteContents();
+  range.insertNode(node);
+  range.setStartAfter(node);
+  range.setEndAfter(node);
+  selection.removeAllRanges();
+  selection.addRange(range);
+}
+
+function selectImage(img) {
+  clearSelectedImage();
+  stateRef.selectedImage = img;
+  img.classList.add('selected-image');
+  els.imageTools.classList.remove('hidden');
+}
+
+function clearSelectedImage() {
+  if (stateRef.selectedImage) {
+    stateRef.selectedImage.classList.remove('selected-image');
+  }
+  stateRef.selectedImage = null;
+}
+
+function hideImageTools() {
+  clearSelectedImage();
+  els.imageTools.classList.add('hidden');
+}
+
+function setImageAlignment(align) {
+  if (!stateRef.selectedImage) return;
+  stateRef.selectedImage.classList.remove('align-left', 'align-center', 'align-right');
+  stateRef.selectedImage.classList.add(`align-${align}`);
+  syncEditorIntoState();
+}
+
+function removeSelectedImage() {
+  if (!stateRef.selectedImage) return;
+  const nextFocus = stateRef.selectedImage.parentElement;
+  stateRef.selectedImage.remove();
+  hideImageTools();
+  nextFocus?.focus?.();
+  syncEditorIntoState();
+}
+
+function bindEvents() {
+  document.getElementById('addSubjectBtn').addEventListener('click', addSubject);
+  document.getElementById('addPageBtn').addEventListener('click', addPage);
+  document.getElementById('saveBtn').addEventListener('click', saveAll);
+  document.getElementById('reloadRemoteBtn').addEventListener('click', reloadFromRemote);
+  document.getElementById('clearLocalBtn').addEventListener('click', async () => {
+    const ok = await confirmModal('Helyi cache törlése', 'Biztosan törölni akarod a helyi cache-t? A GitHubban lévő adatok nem törlődnek.');
+    if (!ok) return;
+    clearLocalDraft();
+    setStatus('Helyi cache törölve.', 'success');
+    setSource('GitHub / statikus forrás');
+  });
+
+  document.getElementById('saveGithubConfigBtn').addEventListener('click', () => {
+    const config = saveConfig(readFormConfig());
+    populateConfigForm(config);
+    saveLocalDraft(stateRef.state);
+    setStatus('GitHub beállítás elmentve.', 'success');
+  });
+  document.getElementById('testGithubBtn').addEventListener('click', githubTestConnection);
+  document.getElementById('toggleSettingsBtn').addEventListener('click', () => {
+    els.settingsPanel.classList.toggle('hidden');
+  });
+
+  els.pageTitleInput.addEventListener('input', queueLocalAutosave);
+  els.editor.addEventListener('input', queueLocalAutosave);
+
+  els.editor.addEventListener('click', (event) => {
+    if (event.target.tagName === 'IMG') {
+      selectImage(event.target);
+    } else {
+      hideImageTools();
+    }
+  });
+
+  els.editor.addEventListener('paste', (event) => {
+    const items = [...(event.clipboardData?.items || [])];
+    const imageItem = items.find(item => item.type.startsWith('image/'));
+    if (!imageItem) return;
+    event.preventDefault();
+    insertImageFromFile(imageItem.getAsFile());
+  });
+
+  document.querySelectorAll('[data-cmd]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      els.editor.focus();
+      document.execCommand(btn.dataset.cmd, false, null);
+      syncEditorIntoState();
+    });
+  });
+
+  document.getElementById('h2Btn').addEventListener('click', applyHeading);
+  document.getElementById('quoteBtn').addEventListener('click', applyQuote);
+  document.getElementById('insertImageBtn').addEventListener('click', () => els.imageInput.click());
+  els.imageInput.addEventListener('change', (event) => {
+    const [file] = event.target.files || [];
+    insertImageFromFile(file);
+    event.target.value = '';
+  });
+
+  document.querySelectorAll('.align-btn').forEach(btn => {
+    btn.addEventListener('click', () => setImageAlignment(btn.dataset.align));
+  });
+  document.getElementById('removeImageBtn').addEventListener('click', removeSelectedImage);
+
+  els.modalCancel.addEventListener('click', () => closeModal(false));
+  els.modalConfirm.addEventListener('click', () => closeModal(true));
+  els.modalBackdrop.addEventListener('click', (event) => {
+    if (event.target === els.modalBackdrop) closeModal(false);
+  });
+
+  window.addEventListener('beforeunload', () => {
+    syncEditorIntoState();
+    saveLocalDraft();
+  });
+}
+
+bindEvents();
+bootstrap();

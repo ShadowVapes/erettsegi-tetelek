@@ -1,23 +1,7 @@
 {
-  "subjects": [
-    {
-      "id": "subj-6es8w8r8-mmi1ve00",
-      "name": "Töri",
-      "pages": [
-        {
-          "id": "page-1cmiohk3-mmi1vlia",
-          "title": "1. tétel",
-          "content": "<br><p></p><div bis_skin_checked=\"1\">asdasdasdasd</div>",
-          "createdAt": "2026-03-08T17:52:46.498Z",
-          "updatedAt": "2026-03-08T18:07:03.877Z"
-        }
-      ],
-      "createdAt": "2026-03-08T17:52:36.768Z",
-      "updatedAt": "2026-03-08T17:53:45.612Z"
-    }
-  ],
-  "meta": {
-    "version": 1,
-    "lastSavedAt": "2026-03-08T18:07:29.272Z"
-  }
+  "version": 2,
+  "updatedAt": "1970-01-01T00:00:00.000Z",
+  "subjects": [],
+  "deletedSubjects": [],
+  "deletedPages": []
 }

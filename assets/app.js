@@ -3,6 +3,10 @@ const STATIC_DATA_PATH = 'data/content.json';
 const GITHUB_DATA_PATH = 'data/content.json';
 const CONFIG_KEY = 'erettsegi_config_current_v2';
 const LOCAL_FALLBACK_SCOPE = 'local-only';
+const AUTOSAVE_DELAY_MS = 1200;
+const AUTOSAVE_TEXT_THRESHOLD = 5;
+const REMOTE_POLL_MS = 4000;
+const BACKUP_COOLDOWN_MS = 180000;
 
 const els = {
   subjectList: document.getElementById('subjectList'),
@@ -34,10 +38,18 @@ const stateRef = {
   selectedSubjectId: null,
   selectedPageId: null,
   selectedImage: null,
-  githubSaveQueue: Promise.resolve(),
   autosaveTimer: null,
+  remotePollTimer: null,
   modalResolver: null,
   loadedSource: 'Kezdés',
+  saveInFlight: false,
+  saveRequested: false,
+  pendingSaveOptions: { forceBackup: false, reason: 'Mentés' },
+  pendingTextChangeCount: 0,
+  hasUnsavedLocalChanges: false,
+  lastKnownRemoteVersion: null,
+  lastBackupAt: 0,
+  lastStatusAt: 0,
 };
 
 function createEmptyState() {
@@ -67,6 +79,26 @@ function deepClone(obj) {
   return JSON.parse(JSON.stringify(obj));
 }
 
+function hashString(text) {
+  let hash = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    hash = ((hash << 5) - hash) + text.charCodeAt(index);
+    hash |= 0;
+  }
+  return `h${Math.abs(hash)}`;
+}
+
+function stateFingerprint(state) {
+  return hashString(JSON.stringify(normalizeState(state)));
+}
+
+function mergeSaveOptions(current, next = {}) {
+  return {
+    forceBackup: Boolean(current?.forceBackup || next.forceBackup),
+    reason: next.reason || current?.reason || 'Mentés',
+  };
+}
+
 function getTimestampValue(value) {
   const time = Date.parse(value || 0);
   return Number.isFinite(time) ? time : 0;
@@ -94,6 +126,7 @@ function tokenKey(scope = toRepoScope()) {
 }
 
 function setStatus(message, tone = 'normal') {
+  stateRef.lastStatusAt = Date.now();
   els.statusText.textContent = message;
   els.statusText.style.color = tone === 'error'
     ? 'var(--danger)'
@@ -475,6 +508,7 @@ function addSubject() {
   saveLocalDraft();
   render();
   setStatus('Tantárgy létrehozva.', 'success');
+  requestGithubSync({ immediate: true, forceBackup: true, reason: 'Új tantárgy mentése' });
 }
 
 function renameSubject(subjectId) {
@@ -488,6 +522,7 @@ function renameSubject(subjectId) {
   saveLocalDraft();
   render();
   setStatus('Tantárgy átnevezve.', 'success');
+  requestGithubSync({ immediate: true, forceBackup: true, reason: 'Tantárgy átnevezése' });
 }
 
 async function deleteSubject(subjectId) {
@@ -511,6 +546,7 @@ async function deleteSubject(subjectId) {
   saveLocalDraft();
   render();
   setStatus('Tantárgy törölve.', 'success');
+  requestGithubSync({ immediate: true, forceBackup: true, reason: 'Tantárgy törlése' });
 }
 
 function addPage() {
@@ -538,6 +574,7 @@ function addPage() {
   render();
   focusEditorSoon();
   setStatus('Oldal létrehozva.', 'success');
+  requestGithubSync({ immediate: true, forceBackup: true, reason: 'Új oldal mentése' });
 }
 
 function renamePage(pageId) {
@@ -552,6 +589,7 @@ function renamePage(pageId) {
   saveLocalDraft();
   render();
   setStatus('Oldal átnevezve.', 'success');
+  requestGithubSync({ immediate: true, forceBackup: true, reason: 'Oldal átnevezése' });
 }
 
 async function deletePage(pageId) {
@@ -572,12 +610,13 @@ async function deletePage(pageId) {
   saveLocalDraft();
   render();
   setStatus('Oldal törölve.', 'success');
+  requestGithubSync({ immediate: true, forceBackup: true, reason: 'Oldal törlése' });
 }
 
 function syncEditorIntoState() {
   const page = getSelectedPage();
   const subject = getSelectedSubject();
-  if (!page || !subject) return;
+  if (!page || !subject) return false;
   const newTitle = els.pageTitleInput.value.trim() || 'Névtelen oldal';
   const newContent = els.editor.innerHTML;
   let changed = false;
@@ -595,16 +634,63 @@ function syncEditorIntoState() {
     subject.updatedAt = timestamp;
     markStateUpdated();
     saveLocalDraft();
+    stateRef.hasUnsavedLocalChanges = true;
     els.pageInfo.textContent = `Utolsó módosítás: ${formatDate(page.updatedAt)}`;
   }
+  return changed;
 }
 
-function queueLocalAutosave() {
+function requestGithubSync(options = {}) {
+  syncEditorIntoState();
+  saveLocalDraft();
+
+  const config = getConfig();
+  if (!currentConfigIsComplete(config) || !config.token) {
+    setSource('Helyi draft');
+    setStatus('Helyi mentés kész. GitHub szinkronhoz owner / repo / branch / token kell.', 'warning');
+    return;
+  }
+
+  stateRef.pendingSaveOptions = mergeSaveOptions(stateRef.pendingSaveOptions, options);
+  stateRef.saveRequested = true;
   window.clearTimeout(stateRef.autosaveTimer);
+
+  const delay = options.immediate ? 0 : (options.delay ?? AUTOSAVE_DELAY_MS);
   stateRef.autosaveTimer = window.setTimeout(() => {
-    syncEditorIntoState();
-    setStatus('Helyi piszkozat frissítve. GitHubra még nincs kimentve.', 'warning');
-  }, 350);
+    flushPendingGithubSave();
+  }, delay);
+}
+
+function estimateInputWeight(event) {
+  if (event?.inputType === 'insertFromPaste') {
+    return Math.max(AUTOSAVE_TEXT_THRESHOLD, event.data?.length || 0, 1);
+  }
+  if (typeof event?.data === 'string' && event.data.length) {
+    return event.data.length;
+  }
+  return 1;
+}
+
+function queueRealtimeAutosave(event) {
+  const changed = syncEditorIntoState();
+  if (!changed) return;
+
+  stateRef.pendingTextChangeCount += estimateInputWeight(event);
+  const shouldPushNow = stateRef.pendingTextChangeCount >= AUTOSAVE_TEXT_THRESHOLD
+    || event?.inputType === 'insertFromPaste'
+    || String(event?.inputType || '').includes('delete');
+
+  if (shouldPushNow) {
+    stateRef.pendingTextChangeCount = 0;
+    requestGithubSync({ immediate: true, reason: 'Automatikus GitHub mentés' });
+    return;
+  }
+
+  requestGithubSync({
+    immediate: false,
+    delay: AUTOSAVE_DELAY_MS,
+    reason: 'Automatikus GitHub mentés',
+  });
 }
 
 function focusEditorSoon() {
@@ -724,17 +810,78 @@ async function githubPutFile(path, contentText, config, sha = null, message = 'U
   });
 }
 
-async function loadRemoteState(config = getConfig()) {
-  const remoteFile = await githubGetFile(GITHUB_DATA_PATH, config);
-  if (!remoteFile.exists) return createEmptyState();
-  return normalizeState(safeJsonParse(remoteFile.content, createEmptyState()));
+function buildRawFileUrl(path, config) {
+  return `https://raw.githubusercontent.com/${encodeURIComponent(config.owner)}/${encodeURIComponent(config.repo)}/${encodeURIComponent(config.branch)}/${path}`;
 }
 
-async function performGithubSave() {
+async function fetchRawRemoteFile(path, config) {
+  const response = await fetch(`${buildRawFileUrl(path, config)}?v=${Date.now()}`, { cache: 'no-store' });
+  if (!response.ok) {
+    if (response.status === 404) {
+      return { exists: false, sha: null, content: '', raw: null };
+    }
+    throw new Error(`A nyers GitHub fájl nem tölthető be (${response.status}).`);
+  }
+  const content = await response.text();
+  return {
+    exists: true,
+    sha: `raw-${hashString(content)}`,
+    content,
+    raw: null,
+  };
+}
+
+async function getRemoteFileForRead(config = getConfig()) {
+  if (!currentConfigIsComplete(config)) {
+    return { exists: false, sha: null, content: '', raw: null };
+  }
+
+  if (!config.token) {
+    return fetchRawRemoteFile(GITHUB_DATA_PATH, config);
+  }
+
+  try {
+    return await githubGetFile(GITHUB_DATA_PATH, config);
+  } catch (error) {
+    return fetchRawRemoteFile(GITHUB_DATA_PATH, config);
+  }
+}
+
+async function loadRemoteSnapshot(config = getConfig()) {
+  const remoteFile = await getRemoteFileForRead(config);
+  const state = remoteFile.exists
+    ? normalizeState(safeJsonParse(remoteFile.content, createEmptyState()))
+    : createEmptyState();
+  return { state, version: remoteFile.sha || stateFingerprint(state), file: remoteFile };
+}
+
+function shouldCreateBackup(forceBackup = false) {
+  if (forceBackup) return true;
+  return (Date.now() - stateRef.lastBackupAt) >= BACKUP_COOLDOWN_MS;
+}
+
+async function createBackupSnapshot(config, mergedState) {
+  const backupPath = `backup/content-${new Date().toISOString().replace(/[:.]/g, '-')}-${Math.random().toString(16).slice(2, 8)}.json`;
+  const backupPayload = JSON.stringify({
+    savedAt: nowIso(),
+    source: 'browser-app',
+    data: mergedState,
+  }, null, 2);
+  await githubPutFile(
+    backupPath,
+    backupPayload,
+    config,
+    null,
+    `Backup: ${new Date().toLocaleString('hu-HU')}`,
+  );
+  stateRef.lastBackupAt = Date.now();
+}
+
+async function performGithubSave(options = {}) {
   const config = getConfig();
   if (!currentConfigIsComplete(config) || !config.token) {
     setStatus('GitHub mentéshez owner / repo / branch / token is kell.', 'warning');
-    return;
+    return false;
   }
 
   syncEditorIntoState();
@@ -742,7 +889,7 @@ async function performGithubSave() {
   setStatus('GitHub mentés folyamatban...');
 
   let attempt = 0;
-  while (attempt < 2) {
+  while (attempt < 4) {
     attempt += 1;
     try {
       const remoteFile = await githubGetFile(GITHUB_DATA_PATH, config);
@@ -754,51 +901,71 @@ async function performGithubSave() {
       mergedState.updatedAt = nowIso();
       const contentText = JSON.stringify(mergedState, null, 2);
 
-      await githubPutFile(
+      const saveResult = await githubPutFile(
         GITHUB_DATA_PATH,
         contentText,
         config,
         remoteFile.sha,
-        `Mentés: ${new Date().toLocaleString('hu-HU')}`,
+        `${options.reason || 'Mentés'}: ${new Date().toLocaleString('hu-HU')}`,
       );
 
-      const backupPath = `backup/content-${new Date().toISOString().replace(/[:.]/g, '-')}-${Math.random().toString(16).slice(2, 8)}.json`;
-      const backupPayload = JSON.stringify({
-        savedAt: nowIso(),
-        source: 'browser-app',
-        data: mergedState,
-      }, null, 2);
-      await githubPutFile(
-        backupPath,
-        backupPayload,
-        config,
-        null,
-        `Backup: ${new Date().toLocaleString('hu-HU')}`,
-      );
+      if (shouldCreateBackup(options.forceBackup)) {
+        await createBackupSnapshot(config, mergedState);
+      }
 
       stateRef.state = mergedState;
+      stateRef.lastKnownRemoteVersion = saveResult?.content?.sha || stateFingerprint(mergedState);
+      stateRef.hasUnsavedLocalChanges = false;
       saveLocalDraft();
       setSource(`GitHub: ${config.owner}/${config.repo}@${config.branch}`);
       setStatus('GitHub mentés kész. A közös adat frissült.', 'success');
       render();
-      return;
+      return true;
     } catch (error) {
-      if (error.status === 409 && attempt < 2) {
-        setStatus('Ütközés volt, friss remote állapottal újrapróbálom...', 'warning');
+      if (error.status === 409 && attempt < 4) {
+        setStatus('Mentési ütközés volt, friss állapottal újrapróbálom...', 'warning');
         continue;
       }
       throw error;
     }
   }
+
+  return false;
 }
 
-function enqueueGithubSave() {
-  const task = stateRef.githubSaveQueue.then(() => performGithubSave());
-  stateRef.githubSaveQueue = task.catch(() => {});
-  return task.catch(error => {
+async function flushPendingGithubSave() {
+  if (!stateRef.saveRequested) return;
+
+  if (stateRef.saveInFlight) {
+    return;
+  }
+
+  const config = getConfig();
+  if (!currentConfigIsComplete(config) || !config.token) {
+    stateRef.saveRequested = false;
+    setSource('Helyi draft');
+    setStatus('Helyi mentés kész. GitHub szinkronhoz töltsd ki a beállításokat.', 'warning');
+    return;
+  }
+
+  stateRef.saveInFlight = true;
+  stateRef.saveRequested = false;
+  const saveOptions = { ...stateRef.pendingSaveOptions };
+  stateRef.pendingSaveOptions = { forceBackup: false, reason: 'Mentés' };
+
+  try {
+    await performGithubSave(saveOptions);
+  } catch (error) {
     setStatus(formatGithubError(error), 'error');
-    throw error;
-  });
+  } finally {
+    stateRef.saveInFlight = false;
+    if (stateRef.saveRequested) {
+      window.clearTimeout(stateRef.autosaveTimer);
+      stateRef.autosaveTimer = window.setTimeout(() => {
+        flushPendingGithubSave();
+      }, 0);
+    }
+  }
 }
 
 async function saveAll() {
@@ -810,11 +977,7 @@ async function saveAll() {
     setSource('Helyi draft');
     return;
   }
-  try {
-    await enqueueGithubSave();
-  } catch {
-    // státuszt az enqueueGithubSave már kezeli
-  }
+  requestGithubSync({ immediate: true, forceBackup: true, reason: 'Kézi mentés' });
 }
 
 async function reloadFromRemote() {
@@ -826,14 +989,64 @@ async function reloadFromRemote() {
   syncEditorIntoState();
   setStatus('GitHub adat újratöltése...');
   try {
-    const remoteState = await loadRemoteState(config);
-    stateRef.state = mergeStates(remoteState, stateRef.state);
+    const remoteSnapshot = await loadRemoteSnapshot(config);
+    stateRef.state = mergeStates(remoteSnapshot.state, stateRef.state);
+    stateRef.lastKnownRemoteVersion = remoteSnapshot.version;
     saveLocalDraft();
     render();
     setSource(`GitHub: ${config.owner}/${config.repo}@${config.branch}`);
     setStatus('GitHub adat betöltve és összefésülve.', 'success');
   } catch (error) {
     setStatus(formatGithubError(error), 'error');
+  }
+}
+
+function startRemotePolling() {
+  stopRemotePolling();
+  const config = getConfig();
+  if (!currentConfigIsComplete(config)) return;
+  stateRef.remotePollTimer = window.setInterval(() => {
+    pollRemoteUpdates();
+  }, REMOTE_POLL_MS);
+}
+
+function stopRemotePolling() {
+  if (stateRef.remotePollTimer) {
+    window.clearInterval(stateRef.remotePollTimer);
+    stateRef.remotePollTimer = null;
+  }
+}
+
+async function pollRemoteUpdates() {
+  const config = getConfig();
+  if (!currentConfigIsComplete(config) || stateRef.saveInFlight) return;
+
+  const isEditing = document.activeElement === els.editor || document.activeElement === els.pageTitleInput;
+  if (isEditing && stateRef.hasUnsavedLocalChanges) return;
+
+  try {
+    const remoteSnapshot = await loadRemoteSnapshot(config);
+    if (remoteSnapshot.version && remoteSnapshot.version === stateRef.lastKnownRemoteVersion) {
+      return;
+    }
+
+    const mergedState = mergeStates(remoteSnapshot.state, stateRef.state);
+    const changed = stateFingerprint(mergedState) !== stateFingerprint(stateRef.state);
+    stateRef.state = mergedState;
+    stateRef.lastKnownRemoteVersion = remoteSnapshot.version;
+    saveLocalDraft();
+
+    if (changed) {
+      render();
+      setSource(`GitHub: ${config.owner}/${config.repo}@${config.branch}`);
+      setStatus('Közös adat frissült.', 'success');
+    }
+  } catch (error) {
+    const now = Date.now();
+    if ((now - stateRef.lastStatusAt) > 12000) {
+      setStatus(`GitHub figyelés hiba: ${formatGithubError(error)}`, 'warning');
+      stateRef.lastStatusAt = now;
+    }
   }
 }
 
@@ -855,9 +1068,10 @@ async function bootstrap() {
 
   if (config.preferRemote && currentConfigIsComplete(config)) {
     try {
-      const remoteState = await loadRemoteState(config);
+      const remoteSnapshot = await loadRemoteSnapshot(config);
       const localDraft = normalizeState(loadLocalDraft(config));
-      stateRef.state = mergeStates(remoteState, localDraft);
+      stateRef.state = mergeStates(remoteSnapshot.state, localDraft);
+      stateRef.lastKnownRemoteVersion = remoteSnapshot.version;
       setSource(`GitHub: ${config.owner}/${config.repo}@${config.branch}`);
       setStatus('GitHub adat betöltve.', 'success');
       loaded = true;
@@ -885,6 +1099,7 @@ async function bootstrap() {
 
   ensureSelectionValid();
   render();
+  startRemotePolling();
 }
 
 function formatGithubError(error) {
@@ -898,11 +1113,13 @@ function formatGithubError(error) {
 function applyHeading() {
   document.execCommand('formatBlock', false, 'h2');
   syncEditorIntoState();
+  requestGithubSync({ immediate: true, reason: 'Formázás mentése' });
 }
 
 function applyQuote() {
   document.execCommand('formatBlock', false, 'blockquote');
   syncEditorIntoState();
+  requestGithubSync({ immediate: true, reason: 'Formázás mentése' });
 }
 
 function insertImageFromFile(file) {
@@ -911,6 +1128,7 @@ function insertImageFromFile(file) {
   reader.onload = () => {
     insertImageAtCaret(reader.result);
     syncEditorIntoState();
+    requestGithubSync({ immediate: true, reason: 'Kép mentése' });
   };
   reader.readAsDataURL(file);
 }
@@ -964,6 +1182,7 @@ function setImageAlignment(align) {
   stateRef.selectedImage.classList.remove('align-left', 'align-center', 'align-right');
   stateRef.selectedImage.classList.add(`align-${align}`);
   syncEditorIntoState();
+  requestGithubSync({ immediate: true, reason: 'Kép igazítás mentése' });
 }
 
 function removeSelectedImage() {
@@ -973,6 +1192,7 @@ function removeSelectedImage() {
   hideImageTools();
   nextFocus?.focus?.();
   syncEditorIntoState();
+  requestGithubSync({ immediate: true, reason: 'Kép törlése' });
 }
 
 function bindEvents() {
@@ -992,6 +1212,7 @@ function bindEvents() {
     const config = saveConfig(readFormConfig());
     populateConfigForm(config);
     saveLocalDraft(stateRef.state);
+    startRemotePolling();
     setStatus('GitHub beállítás elmentve.', 'success');
   });
   document.getElementById('testGithubBtn').addEventListener('click', githubTestConnection);
@@ -999,8 +1220,8 @@ function bindEvents() {
     els.settingsPanel.classList.toggle('hidden');
   });
 
-  els.pageTitleInput.addEventListener('input', queueLocalAutosave);
-  els.editor.addEventListener('input', queueLocalAutosave);
+  els.pageTitleInput.addEventListener('input', queueRealtimeAutosave);
+  els.editor.addEventListener('input', queueRealtimeAutosave);
 
   els.editor.addEventListener('click', (event) => {
     if (event.target.tagName === 'IMG') {
@@ -1023,6 +1244,7 @@ function bindEvents() {
       els.editor.focus();
       document.execCommand(btn.dataset.cmd, false, null);
       syncEditorIntoState();
+      requestGithubSync({ immediate: true, reason: 'Formázás mentése' });
     });
   });
 
@@ -1050,7 +1272,14 @@ function bindEvents() {
     syncEditorIntoState();
     saveLocalDraft();
   });
+
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) {
+      pollRemoteUpdates();
+    }
+  });
 }
+
 
 bindEvents();
 bootstrap();

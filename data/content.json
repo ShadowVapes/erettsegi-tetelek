@@ -1,7 +1,23 @@
 {
   "version": 2,
-  "updatedAt": "1970-01-01T00:00:00.000Z",
-  "subjects": [],
+  "updatedAt": "2026-03-08T18:52:43.722Z",
+  "subjects": [
+    {
+      "id": "subject_cee208e4-9dc1-417c-b186-60957ef68d42",
+      "title": "Történelem",
+      "createdAt": "2026-03-08T18:52:27.322Z",
+      "updatedAt": "2026-03-08T18:52:40.054Z",
+      "pages": [
+        {
+          "id": "page_2ad8cf26-04da-4993-b3c8-b955998e34e8",
+          "title": "1. Tétel",
+          "content": "Hülye fasz",
+          "createdAt": "2026-03-08T18:52:33.618Z",
+          "updatedAt": "2026-03-08T18:52:40.054Z"
+        }
+      ]
+    }
+  ],
   "deletedSubjects": [],
   "deletedPages": []
 }

@@ -1,19 +1,19 @@
 {
   "version": 2,
-  "updatedAt": "2026-03-08T21:20:28.237Z",
+  "updatedAt": "2026-03-08T21:21:25.628Z",
   "subjects": [
     {
       "id": "subject_cee208e4-9dc1-417c-b186-60957ef68d42",
       "title": "Történelem",
       "createdAt": "2026-03-08T18:52:27.322Z",
-      "updatedAt": "2026-03-08T21:20:01.437Z",
+      "updatedAt": "2026-03-08T21:20:39.729Z",
       "pages": [
         {
           "id": "page_2ad8cf26-04da-4993-b3c8-b955998e34e8",
           "title": "1. Tétel",
-          "content": "<div bis_skin_checked=\"1\">aasd</div>",
+          "content": "<div bis_skin_checked=\"1\">aasdasd</div>",
           "createdAt": "2026-03-08T18:52:33.618Z",
-          "updatedAt": "2026-03-08T21:20:01.437Z"
+          "updatedAt": "2026-03-08T21:20:39.729Z"
         }
       ]
     }

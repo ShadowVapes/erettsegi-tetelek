@@ -9,10 +9,11 @@ const LOCAL_STATE_KEY = `erettsegi_supabase_state_${PATH_SCOPE}_v1`;
 const SAVE_DEBOUNCE_MS = 0;
 const GITHUB_TEXT_SYNC_DEBOUNCE_MS = 800;
 const DEFAULT_IMAGE_BUCKET = 'page-images';
-const DEFAULT_SYNC_FUNCTION = 'sync-github';
+const DEFAULT_SYNC_FUNCTION = '';
 const DEFAULT_GITHUB_BRANCH = 'main';
 const GITHUB_CONTENT_PATH = 'data/content.json';
 const GITHUB_BACKUP_COOLDOWN_MS = 120000;
+const REMOTE_POLL_INTERVAL_MS = 2000;
 
 const els = {
   subjectList: document.getElementById('subjectList'),
@@ -51,6 +52,7 @@ const stateRef = {
   selectedImage: null,
   autosaveTimer: null,
   githubSyncTimer: null,
+  remotePollTimer: null,
   modalResolver: null,
   loadedSource: 'Kezdés',
   supabase: null,
@@ -266,7 +268,7 @@ function getConfig() {
     supabaseUrl: raw.supabaseUrl || '',
     supabaseAnonKey: raw.supabaseAnonKey || '',
     imageBucket: raw.imageBucket || DEFAULT_IMAGE_BUCKET,
-    syncFunction: raw.syncFunction || DEFAULT_SYNC_FUNCTION,
+    syncFunction: raw.syncFunction || '',
     githubOwner: raw.githubOwner || '',
     githubRepo: raw.githubRepo || '',
     githubBranch: raw.githubBranch || DEFAULT_GITHUB_BRANCH,
@@ -281,7 +283,7 @@ function saveConfig(config) {
     supabaseUrl: (config.supabaseUrl || '').trim(),
     supabaseAnonKey: (config.supabaseAnonKey || '').trim(),
     imageBucket: (config.imageBucket || DEFAULT_IMAGE_BUCKET).trim() || DEFAULT_IMAGE_BUCKET,
-    syncFunction: (config.syncFunction || DEFAULT_SYNC_FUNCTION).trim(),
+    syncFunction: (config.syncFunction || '').trim(),
     githubOwner: (config.githubOwner || '').trim(),
     githubRepo: (config.githubRepo || '').trim(),
     githubBranch: (config.githubBranch || DEFAULT_GITHUB_BRANCH).trim() || DEFAULT_GITHUB_BRANCH,
@@ -312,7 +314,7 @@ function populateConfigForm(config) {
   els.sbUrl.value = config.supabaseUrl || '';
   els.sbAnonKey.value = config.supabaseAnonKey || '';
   els.sbBucket.value = config.imageBucket || DEFAULT_IMAGE_BUCKET;
-  els.syncFunctionName.value = config.syncFunction || DEFAULT_SYNC_FUNCTION;
+  els.syncFunctionName.value = config.syncFunction || '';
   els.ghOwner.value = config.githubOwner || '';
   els.ghRepo.value = config.githubRepo || '';
   els.ghBranch.value = config.githubBranch || DEFAULT_GITHUB_BRANCH;
@@ -774,6 +776,10 @@ function resetSupabaseClient() {
     stateRef.supabase?.removeChannel?.(stateRef.realtimeChannel);
     stateRef.realtimeChannel = null;
   }
+  if (stateRef.remotePollTimer) {
+    window.clearInterval(stateRef.remotePollTimer);
+    stateRef.remotePollTimer = null;
+  }
   stateRef.supabase = null;
   stateRef.remoteRevision = 0;
 }
@@ -1027,10 +1033,26 @@ async function flushGithubSync() {
       const options = { ...stateRef.pendingGithubOptions };
       stateRef.pendingGithubOptions = { reason: 'GitHub sync', immediate: false, forceBackup: false };
 
-      let edgeErrorMessage = '';
       let handled = false;
+      let directErrorMessage = '';
+      let edgeErrorMessage = '';
 
-      if (hasEdgeFunctionConfig(config) && supabase) {
+      if (hasDirectGithubConfig(config)) {
+        try {
+          const result = await directGithubSync(options, config);
+          handled = true;
+          if (result?.status === 'ok') {
+            setSource('Supabase élő adat + közvetlen GitHub mentés');
+            setStatus('Supabase mentve, GitHub közvetlen mentés is kész.', 'success');
+          } else if (result?.status === 'noop') {
+            setSource('Supabase élő adat + GitHub szinkronban');
+          }
+        } catch (error) {
+          directErrorMessage = error?.message || 'ismeretlen';
+        }
+      }
+
+      if (!handled && hasEdgeFunctionConfig(config) && supabase) {
         const { data, error } = await supabase.functions.invoke(config.syncFunction, {
           body: {
             reason: options.reason || 'Mentés',
@@ -1055,24 +1077,19 @@ async function flushGithubSync() {
         }
       }
 
-      if (!handled && hasDirectGithubConfig(config)) {
-        const result = await directGithubSync(options, config);
-        handled = true;
-        if (result?.status === 'ok') {
-          setSource('Supabase élő adat + közvetlen GitHub mentés');
-          if (edgeErrorMessage) {
-            setStatus(`Supabase mentve. Az Edge Function hibázott, ezért közvetlen GitHub mentésre váltottam (${edgeErrorMessage}).`, 'warning');
-          } else {
-            setStatus('Supabase mentve, GitHub közvetlen mentés is kész.', 'success');
-          }
-        } else if (result?.status === 'noop') {
-          setSource('Supabase élő adat + GitHub szinkronban');
+      if (!handled) {
+        if (directErrorMessage && edgeErrorMessage) {
+          disableGithubSyncTemporarily(`Supabase mentve, de a GitHub mentés most hibás. Közvetlen GitHub: ${directErrorMessage}. Edge Function: ${edgeErrorMessage}.`);
+          return;
         }
-      }
-
-      if (!handled && edgeErrorMessage) {
-        disableGithubSyncTemporarily(`Supabase mentve. A GitHub háttérmentés most nem elérhető (${edgeErrorMessage}), de a szerkesztés megy tovább.`);
-        return;
+        if (directErrorMessage) {
+          disableGithubSyncTemporarily(`Supabase mentve, de a közvetlen GitHub mentés hibás: ${directErrorMessage}`);
+          return;
+        }
+        if (edgeErrorMessage) {
+          disableGithubSyncTemporarily(`Supabase mentve, de a GitHub sync function hibás: ${edgeErrorMessage}`);
+          return;
+        }
       }
     }
   } finally {
@@ -1133,10 +1150,21 @@ async function testSupabaseConnection() {
     if (error) throw error;
 
     if (config.autoGithubSync && hasAnyGithubSyncConfig(config)) {
+      let directOk = false;
+      let directMessage = '';
       let edgeOk = false;
       let edgeMessage = '';
 
-      if (hasEdgeFunctionConfig(config)) {
+      if (hasDirectGithubConfig(config)) {
+        try {
+          await testDirectGithubConnection(config);
+          directOk = true;
+        } catch (error) {
+          directMessage = error?.message || 'ismeretlen';
+        }
+      }
+
+      if (!directOk && hasEdgeFunctionConfig(config)) {
         const probe = await supabase.functions.invoke(config.syncFunction, { body: { dryRun: true } });
         if (probe.error) {
           edgeMessage = probe.error.message || 'ismeretlen';
@@ -1145,20 +1173,18 @@ async function testSupabaseConnection() {
         }
       }
 
-      if (!edgeOk && hasDirectGithubConfig(config)) {
-        await testDirectGithubConnection(config);
+      if (directOk) {
         enableGithubSyncAgain();
-        setStatus(edgeMessage
-          ? `Supabase rendben. Az Edge Function most nem elérhető (${edgeMessage}), de a közvetlen GitHub mentés rendben.`
-          : 'Supabase és közvetlen GitHub mentés rendben.', 'success');
-        return;
-      }
-
-      if (edgeOk) {
+        setStatus('Supabase és közvetlen GitHub mentés rendben.', 'success');
+      } else if (edgeOk) {
         enableGithubSyncAgain();
         setStatus('Supabase és GitHub sync function rendben.', 'success');
+      } else if (directMessage && edgeMessage) {
+        disableGithubSyncTemporarily(`Supabase rendben, de a GitHub mentés hibás. Közvetlen GitHub: ${directMessage}. Edge Function: ${edgeMessage}.`);
+      } else if (directMessage) {
+        disableGithubSyncTemporarily(`Supabase rendben, de a közvetlen GitHub mentés hibás: ${directMessage}`);
       } else if (edgeMessage) {
-        disableGithubSyncTemporarily(`Supabase rendben. A GitHub háttérmentés most nem elérhető (${edgeMessage}), de a szerkesztés és a realtime működik.`);
+        disableGithubSyncTemporarily(`Supabase rendben, de a GitHub sync function hibás: ${edgeMessage}`);
       } else {
         setStatus('Supabase kapcsolat rendben.', 'success');
       }
@@ -1180,6 +1206,65 @@ async function loadStaticState() {
   }
 }
 
+function shouldMergeIncomingRemote() {
+  return Boolean(stateRef.hasUnsavedLocalChanges || stateRef.saveInFlight || stateRef.syncedVersion < stateRef.localVersion);
+}
+
+function applyIncomingRemoteRow(row, source = 'Realtime') {
+  if (!row) return false;
+  const nextRevision = Number(row.revision || 0);
+  if (nextRevision <= stateRef.remoteRevision) return false;
+
+  const previousFingerprint = stateFingerprint(stateRef.state);
+  const remoteState = normalizeState(row.data);
+  stateRef.remoteRevision = nextRevision;
+  stateRef.lastRemoteEditorId = row.editor_id || null;
+
+  if (row.editor_id === stateRef.clientId) {
+    setSource('Supabase élő adat');
+    return false;
+  }
+
+  const mergeNeeded = shouldMergeIncomingRemote();
+
+  if (mergeNeeded) {
+    stateRef.state = mergeStates(remoteState, stateRef.state);
+    stateRef.hasUnsavedLocalChanges = true;
+  } else {
+    stateRef.state = remoteState;
+    stateRef.syncedVersion = stateRef.localVersion;
+    stateRef.hasUnsavedLocalChanges = false;
+  }
+
+  saveLocalDraft();
+  const nextFingerprint = stateFingerprint(stateRef.state);
+
+  if (nextFingerprint !== previousFingerprint && !(mergeNeeded && document.activeElement === els.editor)) {
+    render();
+  }
+
+  if (mergeNeeded) {
+    requestRemoteSave({ immediate: true, reason: `${source} összefésülés`, triggerGithub: true, immediateGithub: false, forceBackup: false });
+  }
+
+  setSource('Supabase élő adat');
+  setStatus('Közös adat frissült.', 'success');
+  return true;
+}
+
+function startRemotePolling() {
+  if (stateRef.remotePollTimer) return;
+  stateRef.remotePollTimer = window.setInterval(async () => {
+    if (!currentConfigIsComplete() || stateRef.saveInFlight) return;
+    try {
+      const row = await fetchRemoteRow();
+      if (row) {
+        applyIncomingRemoteRow(row, 'Polling');
+      }
+    } catch {}
+  }, REMOTE_POLL_INTERVAL_MS);
+}
+
 function subscribeRealtime() {
   const supabase = getSupabase();
   if (!supabase) return;
@@ -1189,6 +1274,8 @@ function subscribeRealtime() {
     stateRef.realtimeChannel = null;
   }
 
+  startRemotePolling();
+
   stateRef.realtimeChannel = supabase
     .channel(`app-state-${PATH_SCOPE}`)
     .on(
@@ -1197,41 +1284,15 @@ function subscribeRealtime() {
       (payload) => {
         const nextRow = payload.new;
         if (!nextRow) return;
-        const nextRevision = Number(nextRow.revision || 0);
-        if (nextRevision <= stateRef.remoteRevision) return;
-
-        stateRef.remoteRevision = nextRevision;
-        stateRef.lastRemoteEditorId = nextRow.editor_id || null;
-
-        if (nextRow.editor_id === stateRef.clientId) {
-          setSource('Supabase élő adat');
-          return;
-        }
-
-        const remoteState = normalizeState(nextRow.data);
-        const currentFingerprint = stateFingerprint(stateRef.state);
-        const mergedState = (stateRef.hasUnsavedLocalChanges || stateRef.saveInFlight)
-          ? mergeStates(remoteState, stateRef.state)
-          : remoteState;
-        const nextFingerprint = stateFingerprint(mergedState);
-        stateRef.state = mergedState;
-        saveLocalDraft();
-
-        if (nextFingerprint !== currentFingerprint && document.activeElement !== els.editor) {
-          render();
-        }
-
-        if (stateRef.hasUnsavedLocalChanges) {
-          requestRemoteSave({ immediate: true, reason: 'Realtime összefésülés', triggerGithub: true, immediateGithub: false, forceBackup: false });
-        }
-
-        setSource('Supabase élő adat');
-        setStatus('Közös adat frissült.', 'success');
+        applyIncomingRemoteRow(nextRow, 'Realtime');
       }
     )
     .subscribe((status) => {
       if (status === 'SUBSCRIBED') {
         setSource('Supabase élő adat');
+      } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+        startRemotePolling();
+        setStatus('Realtime kapcsolat ingadozik, polling fallback aktív.', 'warning');
       }
     });
 }

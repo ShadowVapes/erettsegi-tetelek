@@ -6,10 +6,13 @@ const SINGLETON_ROW_ID = 1;
 const PATH_SCOPE = hashString(window.location.pathname || 'root');
 const CONFIG_KEY = `erettsegi_supabase_config_${PATH_SCOPE}_v1`;
 const LOCAL_STATE_KEY = `erettsegi_supabase_state_${PATH_SCOPE}_v1`;
-const SAVE_DEBOUNCE_MS = 220;
-const GITHUB_TEXT_SYNC_DEBOUNCE_MS = 1200;
+const SAVE_DEBOUNCE_MS = 0;
+const GITHUB_TEXT_SYNC_DEBOUNCE_MS = 800;
 const DEFAULT_IMAGE_BUCKET = 'page-images';
 const DEFAULT_SYNC_FUNCTION = 'sync-github';
+const DEFAULT_GITHUB_BRANCH = 'main';
+const GITHUB_CONTENT_PATH = 'data/content.json';
+const GITHUB_BACKUP_COOLDOWN_MS = 120000;
 
 const els = {
   subjectList: document.getElementById('subjectList'),
@@ -26,6 +29,10 @@ const els = {
   sbAnonKey: document.getElementById('sbAnonKey'),
   sbBucket: document.getElementById('sbBucket'),
   syncFunctionName: document.getElementById('syncFunctionName'),
+  ghOwner: document.getElementById('ghOwner'),
+  ghRepo: document.getElementById('ghRepo'),
+  ghBranch: document.getElementById('ghBranch'),
+  ghToken: document.getElementById('ghToken'),
   autoGithubToggle: document.getElementById('autoGithubToggle'),
   preferRemoteToggle: document.getElementById('preferRemoteToggle'),
   imageInput: document.getElementById('imageInput'),
@@ -62,6 +69,8 @@ const stateRef = {
   lastStatusAt: 0,
   lastRemoteEditorId: null,
   githubSyncAvailable: true,
+  lastGithubSyncedFingerprint: '',
+  lastGithubBackupAt: 0,
 };
 
 function createEmptyState() {
@@ -258,6 +267,10 @@ function getConfig() {
     supabaseAnonKey: raw.supabaseAnonKey || '',
     imageBucket: raw.imageBucket || DEFAULT_IMAGE_BUCKET,
     syncFunction: raw.syncFunction || DEFAULT_SYNC_FUNCTION,
+    githubOwner: raw.githubOwner || '',
+    githubRepo: raw.githubRepo || '',
+    githubBranch: raw.githubBranch || DEFAULT_GITHUB_BRANCH,
+    githubToken: raw.githubToken || '',
     autoGithubSync: raw.autoGithubSync !== false,
     preferRemote: raw.preferRemote !== false,
   };
@@ -268,7 +281,11 @@ function saveConfig(config) {
     supabaseUrl: (config.supabaseUrl || '').trim(),
     supabaseAnonKey: (config.supabaseAnonKey || '').trim(),
     imageBucket: (config.imageBucket || DEFAULT_IMAGE_BUCKET).trim() || DEFAULT_IMAGE_BUCKET,
-    syncFunction: (config.syncFunction || DEFAULT_SYNC_FUNCTION).trim() || DEFAULT_SYNC_FUNCTION,
+    syncFunction: (config.syncFunction || DEFAULT_SYNC_FUNCTION).trim(),
+    githubOwner: (config.githubOwner || '').trim(),
+    githubRepo: (config.githubRepo || '').trim(),
+    githubBranch: (config.githubBranch || DEFAULT_GITHUB_BRANCH).trim() || DEFAULT_GITHUB_BRANCH,
+    githubToken: (config.githubToken || '').trim(),
     autoGithubSync: Boolean(config.autoGithubSync),
     preferRemote: Boolean(config.preferRemote),
   };
@@ -282,6 +299,10 @@ function readFormConfig() {
     supabaseAnonKey: els.sbAnonKey.value,
     imageBucket: els.sbBucket.value,
     syncFunction: els.syncFunctionName.value,
+    githubOwner: els.ghOwner.value,
+    githubRepo: els.ghRepo.value,
+    githubBranch: els.ghBranch.value,
+    githubToken: els.ghToken.value,
     autoGithubSync: els.autoGithubToggle.checked,
     preferRemote: els.preferRemoteToggle.checked,
   };
@@ -292,6 +313,10 @@ function populateConfigForm(config) {
   els.sbAnonKey.value = config.supabaseAnonKey || '';
   els.sbBucket.value = config.imageBucket || DEFAULT_IMAGE_BUCKET;
   els.syncFunctionName.value = config.syncFunction || DEFAULT_SYNC_FUNCTION;
+  els.ghOwner.value = config.githubOwner || '';
+  els.ghRepo.value = config.githubRepo || '';
+  els.ghBranch.value = config.githubBranch || DEFAULT_GITHUB_BRANCH;
+  els.ghToken.value = config.githubToken || '';
   els.autoGithubToggle.checked = config.autoGithubSync !== false;
   els.preferRemoteToggle.checked = config.preferRemote !== false;
 }
@@ -310,6 +335,18 @@ function clearLocalDraft() {
 
 function currentConfigIsComplete(config = getConfig()) {
   return Boolean(config.supabaseUrl && config.supabaseAnonKey);
+}
+
+function hasEdgeFunctionConfig(config = getConfig()) {
+  return Boolean((config.syncFunction || '').trim());
+}
+
+function hasDirectGithubConfig(config = getConfig()) {
+  return Boolean(config.githubOwner && config.githubRepo && config.githubToken);
+}
+
+function hasAnyGithubSyncConfig(config = getConfig()) {
+  return hasEdgeFunctionConfig(config) || hasDirectGithubConfig(config);
 }
 
 function getSelectedSubject() {
@@ -966,7 +1003,7 @@ async function flushPendingRemoteSave() {
 
 function requestGithubSync(options = {}) {
   const config = getConfig();
-  if (!stateRef.githubSyncAvailable || !config.autoGithubSync || !config.syncFunction || !currentConfigIsComplete(config) || !getSupabase()) return;
+  if (!stateRef.githubSyncAvailable || !config.autoGithubSync || !hasAnyGithubSyncConfig(config) || !currentConfigIsComplete(config)) return;
   stateRef.pendingGithubOptions = mergeGithubOptions(stateRef.pendingGithubOptions, options);
   stateRef.githubSyncRequested = true;
   window.clearTimeout(stateRef.githubSyncTimer);
@@ -981,7 +1018,7 @@ async function flushGithubSync() {
   if (stateRef.githubSyncInFlight) return;
   const config = getConfig();
   const supabase = getSupabase();
-  if (!stateRef.githubSyncAvailable || !config.autoGithubSync || !config.syncFunction || !supabase) return;
+  if (!stateRef.githubSyncAvailable || !config.autoGithubSync || !hasAnyGithubSyncConfig(config)) return;
 
   stateRef.githubSyncInFlight = true;
   try {
@@ -989,26 +1026,53 @@ async function flushGithubSync() {
       stateRef.githubSyncRequested = false;
       const options = { ...stateRef.pendingGithubOptions };
       stateRef.pendingGithubOptions = { reason: 'GitHub sync', immediate: false, forceBackup: false };
-      const { data, error } = await supabase.functions.invoke(config.syncFunction, {
-        body: {
-          reason: options.reason || 'Mentés',
-          force: Boolean(options.immediate),
-          forceBackup: Boolean(options.forceBackup),
-          pagePath: window.location.pathname,
-        },
-      });
 
-      if (error) {
-        disableGithubSyncTemporarily(`Supabase mentve. A GitHub háttérmentés most nem elérhető (${error.message || 'ismeretlen'}), de a szerkesztés megy tovább.`);
-        return;
+      let edgeErrorMessage = '';
+      let handled = false;
+
+      if (hasEdgeFunctionConfig(config) && supabase) {
+        const { data, error } = await supabase.functions.invoke(config.syncFunction, {
+          body: {
+            reason: options.reason || 'Mentés',
+            force: Boolean(options.immediate),
+            forceBackup: Boolean(options.forceBackup),
+            pagePath: window.location.pathname,
+          },
+        });
+
+        if (!error) {
+          handled = true;
+          if (data?.status === 'ok') {
+            setSource('Supabase élő adat + GitHub háttérmentés');
+            setStatus('Supabase mentve, GitHub háttérmentés is kész.', 'success');
+          } else if (data?.status === 'noop') {
+            setSource('Supabase élő adat + GitHub szinkronban');
+          } else if (data?.status === 'cooldown') {
+            setSource('Supabase élő adat + GitHub rövid késleltetéssel');
+          }
+        } else {
+          edgeErrorMessage = error.message || 'ismeretlen';
+        }
       }
 
-      if (data?.status === 'ok') {
-        setSource('Supabase élő adat + GitHub háttérmentés');
-      } else if (data?.status === 'noop') {
-        setSource('Supabase élő adat + GitHub szinkronban');
-      } else if (data?.status === 'cooldown') {
-        setSource('Supabase élő adat + GitHub rövid késleltetéssel');
+      if (!handled && hasDirectGithubConfig(config)) {
+        const result = await directGithubSync(options, config);
+        handled = true;
+        if (result?.status === 'ok') {
+          setSource('Supabase élő adat + közvetlen GitHub mentés');
+          if (edgeErrorMessage) {
+            setStatus(`Supabase mentve. Az Edge Function hibázott, ezért közvetlen GitHub mentésre váltottam (${edgeErrorMessage}).`, 'warning');
+          } else {
+            setStatus('Supabase mentve, GitHub közvetlen mentés is kész.', 'success');
+          }
+        } else if (result?.status === 'noop') {
+          setSource('Supabase élő adat + GitHub szinkronban');
+        }
+      }
+
+      if (!handled && edgeErrorMessage) {
+        disableGithubSyncTemporarily(`Supabase mentve. A GitHub háttérmentés most nem elérhető (${edgeErrorMessage}), de a szerkesztés megy tovább.`);
+        return;
       }
     }
   } finally {
@@ -1068,13 +1132,35 @@ async function testSupabaseConnection() {
     const { error } = await supabase.from('app_state').select('id, revision').eq('id', SINGLETON_ROW_ID).maybeSingle();
     if (error) throw error;
 
-    if (config.autoGithubSync && config.syncFunction) {
-      const probe = await supabase.functions.invoke(config.syncFunction, { body: { dryRun: true } });
-      if (probe.error) {
-        disableGithubSyncTemporarily(`Supabase rendben. A GitHub háttérmentés most nem elérhető (${probe.error.message || 'ismeretlen'}), de a szerkesztés és a realtime működik.`);
-      } else {
+    if (config.autoGithubSync && hasAnyGithubSyncConfig(config)) {
+      let edgeOk = false;
+      let edgeMessage = '';
+
+      if (hasEdgeFunctionConfig(config)) {
+        const probe = await supabase.functions.invoke(config.syncFunction, { body: { dryRun: true } });
+        if (probe.error) {
+          edgeMessage = probe.error.message || 'ismeretlen';
+        } else {
+          edgeOk = true;
+        }
+      }
+
+      if (!edgeOk && hasDirectGithubConfig(config)) {
+        await testDirectGithubConnection(config);
+        enableGithubSyncAgain();
+        setStatus(edgeMessage
+          ? `Supabase rendben. Az Edge Function most nem elérhető (${edgeMessage}), de a közvetlen GitHub mentés rendben.`
+          : 'Supabase és közvetlen GitHub mentés rendben.', 'success');
+        return;
+      }
+
+      if (edgeOk) {
         enableGithubSyncAgain();
         setStatus('Supabase és GitHub sync function rendben.', 'success');
+      } else if (edgeMessage) {
+        disableGithubSyncTemporarily(`Supabase rendben. A GitHub háttérmentés most nem elérhető (${edgeMessage}), de a szerkesztés és a realtime működik.`);
+      } else {
+        setStatus('Supabase kapcsolat rendben.', 'success');
       }
     } else {
       setStatus('Supabase kapcsolat rendben.', 'success');
@@ -1337,6 +1423,136 @@ function removeSelectedImage() {
   nextFocus?.focus?.();
   syncEditorIntoState();
   requestRemoteSave({ immediate: true, reason: 'Kép törlése', triggerGithub: true, immediateGithub: true, forceBackup: false });
+}
+
+
+async function testDirectGithubConnection(config = getConfig()) {
+  if (!hasDirectGithubConfig(config)) {
+    throw new Error('Hiányzik a GitHub owner / repo / token a közvetlen mentéshez.');
+  }
+  await githubGetFileBrowser({
+    owner: config.githubOwner,
+    repo: config.githubRepo,
+    branch: config.githubBranch || DEFAULT_GITHUB_BRANCH,
+    token: config.githubToken,
+    path: GITHUB_CONTENT_PATH,
+  });
+  return true;
+}
+
+async function directGithubSync(options = {}, config = getConfig()) {
+  if (!hasDirectGithubConfig(config)) {
+    throw new Error('Hiányzik a közvetlen GitHub mentés beállítása.');
+  }
+
+  const snapshot = normalizeState(deepClone(stateRef.state));
+  const contentText = JSON.stringify(snapshot, null, 2);
+  const fingerprint = hashString(contentText);
+
+  if (!options.forceBackup && stateRef.lastGithubSyncedFingerprint === fingerprint) {
+    return { status: 'noop' };
+  }
+
+  const timestampLabel = new Date().toLocaleString('hu-HU');
+  await putGithubFileBrowser({
+    owner: config.githubOwner,
+    repo: config.githubRepo,
+    branch: config.githubBranch || DEFAULT_GITHUB_BRANCH,
+    token: config.githubToken,
+    path: GITHUB_CONTENT_PATH,
+    contentText,
+    message: `${options.reason || 'Közvetlen GitHub sync'} · ${timestampLabel}`,
+  });
+
+  let backupCreated = false;
+  const now = Date.now();
+  if (options.forceBackup || !stateRef.lastGithubBackupAt || (now - stateRef.lastGithubBackupAt) >= GITHUB_BACKUP_COOLDOWN_MS) {
+    const backupTimestamp = new Date().toISOString();
+    const backupText = JSON.stringify({
+      savedAt: backupTimestamp,
+      source: 'browser-direct-github-sync',
+      data: snapshot,
+    }, null, 2);
+
+    await putGithubFileBrowser({
+      owner: config.githubOwner,
+      repo: config.githubRepo,
+      branch: config.githubBranch || DEFAULT_GITHUB_BRANCH,
+      token: config.githubToken,
+      path: `backup/content-${backupTimestamp.replace(/[:.]/g, '-')}.json`,
+      contentText: backupText,
+      message: `Backup · ${timestampLabel}`,
+    });
+    stateRef.lastGithubBackupAt = now;
+    backupCreated = true;
+  }
+
+  stateRef.lastGithubSyncedFingerprint = fingerprint;
+  return { status: 'ok', backupCreated };
+}
+
+async function putGithubFileBrowser({ owner, repo, branch, token, path, contentText, message }) {
+  let latestSha = null;
+
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    const currentFile = await githubGetFileBrowser({ owner, repo, branch, token, path });
+    latestSha = currentFile.sha;
+
+    const response = await fetch(`https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/contents/${path}`, {
+      method: 'PUT',
+      headers: {
+        'Accept': 'application/vnd.github+json',
+        'Authorization': `Bearer ${token}`,
+        'X-GitHub-Api-Version': '2022-11-28',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        message,
+        content: utf8ToBase64(contentText),
+        branch,
+        ...(latestSha ? { sha: latestSha } : {}),
+      }),
+    });
+
+    const rawText = await response.text();
+    const data = safeJsonParse(rawText, rawText);
+    if (response.ok) {
+      return data;
+    }
+    if (response.status === 409) {
+      await sleep(250 * (attempt + 1));
+      continue;
+    }
+    throw new Error(`GitHub hiba ${response.status}: ${typeof data === 'object' ? data?.message || 'ismeretlen' : rawText}`);
+  }
+
+  throw new Error('A GitHub mentés 409 konfliktus miatt többször sem ment át.');
+}
+
+async function githubGetFileBrowser({ owner, repo, branch, token, path }) {
+  const response = await fetch(`https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/contents/${path}?ref=${encodeURIComponent(branch)}`, {
+    headers: {
+      'Accept': 'application/vnd.github+json',
+      'Authorization': `Bearer ${token}`,
+      'X-GitHub-Api-Version': '2022-11-28',
+    },
+  });
+
+  if (response.status === 404) {
+    return { sha: null };
+  }
+
+  const rawText = await response.text();
+  const data = safeJsonParse(rawText, rawText);
+  if (!response.ok) {
+    throw new Error(`GitHub olvasási hiba ${response.status}: ${typeof data === 'object' ? data?.message || 'ismeretlen' : rawText}`);
+  }
+
+  return { sha: data?.sha || null };
+}
+
+function utf8ToBase64(text) {
+  return btoa(unescape(encodeURIComponent(text)));
 }
 
 function sleep(ms) {

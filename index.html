@@ -43,6 +43,24 @@
             <span>GitHub sync function</span>
             <input id="syncFunctionName" type="text" value="sync-github" autocomplete="off" />
           </label>
+          <label>
+            <span>GitHub owner</span>
+            <input id="ghOwner" type="text" placeholder="felhasznalonev vagy organization" autocomplete="off" />
+          </label>
+          <label>
+            <span>GitHub repo</span>
+            <input id="ghRepo" type="text" placeholder="repo-nev" autocomplete="off" />
+          </label>
+          <div class="row gap wrap">
+            <label>
+              <span>GitHub branch</span>
+              <input id="ghBranch" type="text" value="main" autocomplete="off" />
+            </label>
+            <label>
+              <span>GitHub token</span>
+              <input id="ghToken" type="password" placeholder="fine-grained token" autocomplete="new-password" />
+            </label>
+          </div>
           <div class="row gap">
             <button id="saveSupabaseConfigBtn" class="secondary-btn">Beállítás mentése</button>
             <button id="testSupabaseBtn" class="ghost-btn">Kapcsolat teszt</button>
@@ -55,7 +73,7 @@
             <input id="preferRemoteToggle" type="checkbox" checked />
             <span>Induláskor a Supabase legyen az elsődleges adatforrás</span>
           </label>
-          <p class="muted tiny">A valós idejű közös adat a Supabase-ben van. A GitHub mentés háttér backupként fut.</p>
+          <p class="muted tiny">A valós idejű közös adat a Supabase-ben van. A GitHub mentés mehet Edge Functionnel vagy közvetlenül a GitHub API-val is.</p>
         </div>
       </div>
 

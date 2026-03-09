@@ -1,7 +1,23 @@
 {
-  "version": 2,
-  "updatedAt": "1970-01-01T00:00:00.000Z",
-  "subjects": [],
+  "version": 3,
+  "updatedAt": "2026-03-09T12:13:43.193Z",
+  "subjects": [
+    {
+      "id": "subject_10bb32b1-9899-4546-b958-d790ce6c1e75",
+      "title": "Első tantárgy",
+      "createdAt": "2026-03-09T12:13:42.493Z",
+      "updatedAt": "2026-03-09T12:13:43.193Z",
+      "pages": [
+        {
+          "id": "page_aa6d3829-da84-4f6f-9c47-6747e9616161",
+          "title": "Első oldal",
+          "content": "<p>Kezdhetsz írni ide.asd</p>",
+          "createdAt": "2026-03-09T12:13:42.493Z",
+          "updatedAt": "2026-03-09T12:13:43.193Z"
+        }
+      ]
+    }
+  ],
   "deletedSubjects": [],
   "deletedPages": []
 }

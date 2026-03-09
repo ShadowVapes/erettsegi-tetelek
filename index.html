@@ -3,146 +3,170 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Gazdálkodj Pajkosan - Online</title>
-  <link rel="stylesheet" href="./assets/styles.css" />
+  <title>Érettségi Tételek</title>
+  <meta name="theme-color" content="#111827" />
+  <link rel="stylesheet" href="assets/style.css" />
 </head>
-<body class="boardgame-body">
+<body>
   <div class="app-shell">
-    <header class="topbar">
-      <div>
-        <div class="eyebrow">MULTIPLAYER TÁRSAS ALAP</div>
-        <h1 id="titleMain">Gazdálkodj Pajkosan</h1>
-        <p id="subtitleMain" class="subtitle">Vicces, egyszerű társas paródia multiplayerben.</p>
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-badge">É</div>
+        <div>
+          <h1>Érettségi Tételek</h1>
+          <p>Jegyzetek, tételek, képek</p>
+        </div>
       </div>
-      <div id="connectionStatus" class="status-box">Kapcsolódás...</div>
-    </header>
 
-    <main class="main-wrap">
-      <section id="lobbyScreen" class="screen active">
-        <div class="lobby-grid">
-          <section class="panel parchment-panel">
-            <h2>Lobby</h2>
-            <p class="muted">Hozz létre egy szobát vagy csatlakozz. A lobby és a játéktér külön nézet.</p>
-            <div id="loadErrorBox" class="notice danger hidden"></div>
-            <div class="form-stack">
-              <label>Játékosnév
-                <input id="playerName" type="text" maxlength="24" placeholder="pl. Tesó" />
-              </label>
-              <button id="createRoomBtn" class="board-btn board-btn-primary">Új szoba</button>
-              <div class="separator">vagy</div>
-              <label>Szobakód
-                <input id="roomCodeInput" type="text" maxlength="6" placeholder="pl. AB12C" />
-              </label>
-              <button id="joinRoomBtn" class="board-btn">Csatlakozás</button>
-            </div>
-          </section>
+      <div class="sync-card card">
+        <div class="sync-head">
+          <div>
+            <h2>Supabase élő szinkron</h2>
+            <p>Realtime adat + GitHub háttérmentés</p>
+          </div>
+          <button id="toggleSettingsBtn" class="ghost-btn small">Beállítás</button>
+        </div>
+        <div id="settingsPanel" class="settings-panel hidden">
+          <label>
+            <span>Supabase URL</span>
+            <input id="sbUrl" type="url" placeholder="https://projekt.supabase.co" autocomplete="off" />
+          </label>
+          <label>
+            <span>Publishable / anon key</span>
+            <input id="sbAnonKey" type="password" placeholder="sb_publishable_... / anon key" autocomplete="new-password" />
+          </label>
+          <label>
+            <span>Kép bucket</span>
+            <input id="sbBucket" type="text" value="page-images" autocomplete="off" />
+          </label>
+          <label>
+            <span>GitHub sync function (opcionális)</span>
+            <input id="syncFunctionName" type="text" placeholder="pl. sync-github" autocomplete="off" />
+          </label>
+          <label>
+            <span>GitHub owner</span>
+            <input id="ghOwner" type="text" placeholder="felhasznalonev vagy organization" autocomplete="off" />
+          </label>
+          <label>
+            <span>GitHub repo</span>
+            <input id="ghRepo" type="text" placeholder="repo-nev" autocomplete="off" />
+          </label>
+          <div class="row gap wrap">
+            <label>
+              <span>GitHub branch</span>
+              <input id="ghBranch" type="text" value="main" autocomplete="off" />
+            </label>
+            <label>
+              <span>GitHub token</span>
+              <input id="ghToken" type="password" placeholder="fine-grained token" autocomplete="new-password" />
+            </label>
+          </div>
+          <div class="row gap">
+            <button id="saveSupabaseConfigBtn" class="secondary-btn">Beállítás mentése</button>
+            <button id="testSupabaseBtn" class="ghost-btn">Kapcsolat teszt</button>
+          </div>
+          <label class="checkbox-row">
+            <input id="autoGithubToggle" type="checkbox" checked />
+            <span>GitHub háttérmentés is menjen automatikusan</span>
+          </label>
+          <label class="checkbox-row">
+            <input id="preferRemoteToggle" type="checkbox" checked />
+            <span>Induláskor a Supabase legyen az elsődleges adatforrás</span>
+          </label>
+          <p class="muted tiny">A valós idejű közös adat a Supabase-ben van. A GitHub mentéshez elég a GitHub owner + repo + token is. A sync function csak opcionális.</p>
+        </div>
+      </div>
 
-          <section class="panel parchment-panel info-panel">
-            <h2>Alap infó</h2>
-            <ul class="plain-list">
-              <li>A host indítja a játékot.</li>
-              <li>Dobni az aktív játékos tud, a kockára kattintva.</li>
-              <li>A mezők, kártyák, tárgyak és az animációk ideje adminból állítható.</li>
-              <li>A dizájn direkt egyszerű társasjátékos, nem modern webappos.</li>
-            </ul>
-            <div class="notice top-gap"><strong>Admin:</strong> <a href="./admin.html">admin.html</a></div>
-          </section>
+      <div class="sidebar-section">
+        <div class="section-head">
+          <h2>Tantárgyak</h2>
+          <button id="addSubjectBtn" class="primary-btn small">+ Új</button>
+        </div>
+        <div id="subjectList" class="subject-list"></div>
+      </div>
+    </aside>
+
+    <main class="content-area">
+      <header class="topbar card">
+        <div class="topbar-left">
+          <div>
+            <h2 id="currentSubjectTitle">Válassz tantárgyat</h2>
+            <p id="currentSubjectMeta">Itt tudod kezelni az oldalakat és a tartalmat.</p>
+          </div>
+        </div>
+        <div class="topbar-actions">
+          <button id="reloadRemoteBtn" class="ghost-btn">Közös adat újratöltés</button>
+          <button id="clearLocalBtn" class="ghost-btn">Helyi cache törlése</button>
+          <button id="saveBtn" class="primary-btn">Mentés most</button>
+        </div>
+      </header>
+
+      <section class="workspace">
+        <div class="pages-panel card">
+          <div class="section-head">
+            <h3>Oldalak</h3>
+            <button id="addPageBtn" class="secondary-btn small">+ Új oldal</button>
+          </div>
+          <div id="pageList" class="page-list empty-state-box">
+            <p>Nincs kiválasztott tantárgy.</p>
+          </div>
         </div>
 
-        <section id="roomLobbyPanel" class="panel parchment-panel hidden room-panel">
-          <div class="row between wrap">
-            <div>
-              <div class="eyebrow">AKTÍV SZOBA</div>
-              <h2 id="roomCodeTitle">---</h2>
+        <div class="editor-panel card">
+          <div class="editor-head">
+            <div class="editor-title-wrap">
+              <input id="pageTitleInput" type="text" placeholder="Oldal címe" />
+              <p id="pageInfo" class="muted">Válassz vagy hozz létre egy oldalt.</p>
             </div>
-            <div class="row wrap">
-              <button id="refreshLobbyBtn" class="board-btn">Frissítés</button>
-              <button id="leaveRoomBtn" class="board-btn board-btn-danger">Kilépés</button>
+            <div class="row gap wrap">
+              <button class="toolbar-btn" data-cmd="bold"><strong>B</strong></button>
+              <button class="toolbar-btn" data-cmd="italic"><em>I</em></button>
+              <button class="toolbar-btn" data-cmd="underline"><u>U</u></button>
+              <button class="toolbar-btn" data-cmd="insertUnorderedList">• Lista</button>
+              <button class="toolbar-btn" data-cmd="insertOrderedList">1. Lista</button>
+              <button id="h2Btn" class="toolbar-btn">Címsor</button>
+              <button id="quoteBtn" class="toolbar-btn">Idézet</button>
+              <button id="insertImageBtn" class="toolbar-btn">Kép</button>
+              <input id="imageInput" type="file" accept="image/*" hidden />
             </div>
           </div>
-          <div class="room-grid top-gap">
-            <section class="sub-panel">
-              <h3>Játékosok</h3>
-              <div id="lobbyPlayers" class="card-stack"></div>
-            </section>
-            <section class="sub-panel">
-              <h3>Szoba</h3>
-              <div id="lobbyMeta" class="meta-box"></div>
-              <button id="startGameBtn" class="board-btn board-btn-success full top-gap">Játék indítása</button>
-            </section>
+
+          <div id="editor" class="editor" contenteditable="true" spellcheck="true"></div>
+
+          <div id="imageTools" class="image-tools hidden">
+            <span>Kijelölt kép:</span>
+            <button data-align="left" class="ghost-btn small align-btn">Balra</button>
+            <button data-align="center" class="ghost-btn small align-btn">Középre</button>
+            <button data-align="right" class="ghost-btn small align-btn">Jobbra</button>
+            <button id="removeImageBtn" class="danger-btn small">Kép törlése</button>
           </div>
-        </section>
+        </div>
       </section>
 
-      <section id="gameScreen" class="screen hidden">
-        <section class="panel parchment-panel game-header-panel">
-          <div>
-            <div class="eyebrow">JÁTÉKTÉR</div>
-            <h2 id="gameRoomTitle">Szoba: ---</h2>
-          </div>
-          <div class="row wrap">
-            <button id="backToLobbyBtn" class="board-btn">Lobby</button>
-            <button id="leaveGameBtn" class="board-btn board-btn-danger">Kilépés</button>
-          </div>
-        </section>
-
-        <div class="game-grid">
-          <section class="panel board-panel">
-            <div class="board-topline">
-              <div id="turnInfo" class="info-strip">Kör információk...</div>
-              <div id="diceInfo" class="mini-strip">-</div>
-            </div>
-
-            <div class="board-stage">
-              <div id="board" class="board-grid"></div>
-              <div class="center-control">
-                <div class="center-heading">Dobás</div>
-                <div id="diceFace" class="dice-face clickable" aria-label="Dobókocka"></div>
-                <div id="diceLabel" class="dice-label">Kattints a kockára!</div>
-                <div id="deckArea" class="deck-area hidden">
-                  <button id="drawCardBtn" class="card-deck"><span class="deck-subtitle">Ha mező vagy hatás kéri, innen húzol lapot.</span></button>
-                </div>
-                <div id="decisionArea" class="decision-area hidden">
-                  <div id="decisionTitle" class="decision-title">Vásárlás</div>
-                  <div id="decisionText" class="decision-text">Döntsd el, megveszed-e.</div>
-                  <div class="row wrap center-row">
-                    <button id="buyItemBtn" class="board-btn board-btn-success">Megveszem</button>
-                    <button id="skipItemBtn" class="board-btn">Kihagyom</button>
-                  </div>
-                </div>
-                <div id="actionInfo" class="action-box top-gap">Várakozás...</div>
-              </div>
-
-              <div id="eventOverlay" class="event-overlay hidden" aria-live="polite">
-                <div id="eventBanner" class="event-banner"></div>
-                <div id="eventCard" class="event-card tile-gold">
-                  <div class="event-icon-wrap"><div id="eventIcon" class="event-icon">✨</div></div>
-                  <div class="event-body">
-                    <div id="eventType" class="event-type">MEZŐ</div>
-                    <h3 id="eventTitle">Esemény</h3>
-                    <p id="eventText">Leírás</p>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </section>
-
-          <aside class="side-grid">
-            <section class="panel parchment-panel">
-              <h3>Játékosok és tárgyak</h3>
-              <div id="gamePlayers" class="card-stack"></div>
-            </section>
-            <section class="panel parchment-panel">
-              <h3>Legutóbbi események</h3>
-              <div id="logList" class="log-list"></div>
-            </section>
-          </aside>
+      <section class="status-bar card">
+        <div>
+          <strong>Állapot:</strong>
+          <span id="statusText">Kész.</span>
+        </div>
+        <div>
+          <strong>Forrás:</strong>
+          <span id="sourceText">Statikus fájl / helyi mentés</span>
         </div>
       </section>
     </main>
   </div>
 
-  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <script type="module" src="./assets/app.js"></script>
+  <div id="modalBackdrop" class="modal-backdrop hidden">
+    <div class="modal card">
+      <h3 id="modalTitle">Megerősítés</h3>
+      <p id="modalMessage">Biztosan törölni akarod?</p>
+      <div class="modal-actions">
+        <button id="modalCancel" class="ghost-btn">Mégse</button>
+        <button id="modalConfirm" class="danger-btn">Törlés</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="assets/app.js"></script>
 </body>
 </html>

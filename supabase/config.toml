@@ -1,0 +1,4 @@
+project_id = "IDE_IRD_A_PROJECT_REF_ET"
+
+[functions.sync-github]
+verify_jwt = false

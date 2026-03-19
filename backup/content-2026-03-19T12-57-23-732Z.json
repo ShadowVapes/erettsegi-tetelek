@@ -1,0 +1,27 @@
+{
+  "savedAt": "2026-03-19T12:57:23.732Z",
+  "source": "browser-direct-github-sync",
+  "data": {
+    "version": 3,
+    "updatedAt": "2026-03-19T12:57:20.028Z",
+    "subjects": [
+      {
+        "id": "subject_10bb32b1-9899-4546-b958-d790ce6c1e75",
+        "title": "Első tantárgy",
+        "createdAt": "2026-03-09T12:13:42.493Z",
+        "updatedAt": "2026-03-19T10:37:30.610Z",
+        "pages": [
+          {
+            "id": "page_aa6d3829-da84-4f6f-9c47-6747e9616161",
+            "title": "Kádár korszak",
+            "content": "<u>1956-1989</u><br><ul><li>56-os forradalom leverésével a megtorlás időszaka következik 1958 nyaráig<br></li><li>a megtorlás időszakában több mint 200k ember hagyta el az országot</li><li>1958 júni 16 - kivégzik Nagy Imrét és társait</li><li>létrehozzák az MSZMP-t&nbsp;</li><li>\" Aki nincs velünk, az ellenünk van! \" - Rákosi</li><li>\" Aki nincs ellenünk, az velünk van! \" - Kádár</li><li>1957 - A munkásőrség és a KISZ (Kommunista Ifjúsági Szövetség) megalapitása</li><li>kisdobos és úttörő mozgalom - Szocialista nevelés</li><li>Gazdaság tervutasitásos újra elosztó rendszer</li><li>az ország szántóföldjeinek 80-90%-át állami vagy szövetkezeti tulajdonba veszik 1960-ra</li><li>1961-ben bevezetik a háztáji gazdálkodást - A Tsz-ben végzett munka mellett engedélyzték az állatok tenyésztését, a zöldség és gyümölcs termesztést</li><li>1963-ban az ENSZ nyomására a politikai fogjok amnesztiát kapnak</li><li>Fellendül a nehéz és a vegyipar - Bauxit, Kőolaj, Műtrágya, Permetszerek, Esőkabát, Farmer, Harisnya (nagy mennyiség, de szar minőség)</li><li>1968 - Újgazdasági mechanizmus - Foch Jenő, Nyers Rezső, Fehér Lajos</li><li>A kormányzat csak a tervszámokat határozta meg, de az üzemek döntöttek a termelésről, bérezésről és az értékesitésről</li><li>Második gazdaság és fekete gazdaság - Napi 12-14 óra munkávan több jövedelemhez lehetett jutni</li><li>Fekete gazdaság, Fusizás, Maszekolás - kiegészitő jövedelem<br><br></li></ul>",
+            "createdAt": "2026-03-09T12:13:42.493Z",
+            "updatedAt": "2026-03-19T10:37:30.610Z"
+          }
+        ]
+      }
+    ],
+    "deletedSubjects": [],
+    "deletedPages": []
+  }
+}

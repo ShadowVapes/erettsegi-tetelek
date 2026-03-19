@@ -1,19 +1,19 @@
 {
   "version": 3,
-  "updatedAt": "2026-03-19T09:32:08.113Z",
+  "updatedAt": "2026-03-19T09:49:12.178Z",
   "subjects": [
     {
       "id": "subject_10bb32b1-9899-4546-b958-d790ce6c1e75",
       "title": "Első tantárgy",
       "createdAt": "2026-03-09T12:13:42.493Z",
-      "updatedAt": "2026-03-19T09:32:08.107Z",
+      "updatedAt": "2026-03-19T09:49:12.088Z",
       "pages": [
         {
           "id": "page_aa6d3829-da84-4f6f-9c47-6747e9616161",
           "title": "Kádár korszak",
-          "content": "<u>1956-1989</u><br><ul><li>56-os forradalom leverésével a megtorlás időszaka következik 1958 nyaráig<br></li><li>a megtorlás időszakában több mint 200k ember hagyta el az országot</li><li>1958 júni 16 - kivégzik Nagy Imrét és társait</li><li>létrehozzák az MSZMP-t&nbsp;</li><li>\" Aki nincs velünk, az ellenünk van! \"&nbsp;</li><li><br></li></ul>",
+          "content": "<u>1956-1989</u><br><ul><li>56-os forradalom leverésével a megtorlás időszaka következik 1958 nyaráig<br></li><li>a megtorlás időszakában több mint 200k ember hagyta el az országot</li><li>1958 júni 16 - kivégzik Nagy Imrét és társait</li><li>létrehozzák az MSZMP-t&nbsp;</li><li>\" Aki nincs velünk, az ellenünk van! \" - Rákosi</li><li>\" Aki nincs ellenünk, az velünk van! \" - Kádár</li><li>1957 - A munkásőrség és a KISZ (Kommunista Ifjúsági Szövetség) megalapitása</li><li>kisdobos és úttörő mozgalom - Szocialista nevelés</li><li>Gazdaság tervutasitásos újra elosztó rendszer</li><li>az ország szántóföldjeinek 80-90%-át állami vagy szövetkezeti tulajdonba veszik 1960-ra</li><li>1961 majd te mondod meg</li></ul>",
           "createdAt": "2026-03-09T12:13:42.493Z",
-          "updatedAt": "2026-03-19T09:32:08.107Z"
+          "updatedAt": "2026-03-19T09:49:12.088Z"
         }
       ]
     }

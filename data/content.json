@@ -1,6 +1,6 @@
 {
   "version": 3,
-  "updatedAt": "2026-03-24T16:49:27.815Z",
+  "updatedAt": "2026-03-25T08:27:24.479Z",
   "subjects": [
     {
       "id": "subject_10bb32b1-9899-4546-b958-d790ce6c1e75",
@@ -21,14 +21,14 @@
       "id": "subject_f5a14d70-bed8-4f2c-8b6e-9a704758dc5e",
       "title": "Irodalom",
       "createdAt": "2026-03-22T07:59:17.917Z",
-      "updatedAt": "2026-03-22T08:22:13.105Z",
+      "updatedAt": "2026-03-24T16:49:53.272Z",
       "pages": [
         {
           "id": "page_76bab05b-9bb9-47c7-ad16-1eeb0b277c56",
           "title": "Andrássy Réka",
-          "content": "<ul><li>Kevésbé Hagyományos lirai alkotók közé tartozik</li><li>Publicista és véleményiró</li></ul>Több visszatérő téma:<div><ul><li>Hétköznapi élethelyzetek (család, társadalmi szerepek)</li><li>Közéleti reflexiók</li><li>Női nézőpont és identitás</li><li>Társadalomkritika</li></ul>Hangnem és Stilus</div><div><ul><li>Ironikus és Szatirikus hang (gyakran él gúnnyal, finom vagy éles kritikával)</li><li>Élőbeszédszerű, Hétköznapi</li><li>Humoros (sokszor oldja a komolyabb témákat is)</li></ul>Műfaji sajátosság</div><div><ul><li>határterület a lira és a publicisztika közt</li><li>„versbe írt véleménycikkek”</li></ul></div>",
+          "content": "<ul><li>Kevésbé Hagyományos lirai alkotók közé tartozik</li><li>Publicista és véleményiró</li></ul>Több visszatérő téma:<div bis_skin_checked=\"1\"><ul><li>Hétköznapi élethelyzetek (család, társadalmi szerepek)</li><li>Közéleti reflexiók</li><li>Női nézőpont és identitás</li><li>Társadalomkritika</li></ul>Hangnem és Stilus</div><div bis_skin_checked=\"1\"><ul><li>Ironikus és Szatirikus hang (gyakran él gúnnyal, finom vagy éles kritikával)</li><li>Élőbeszédszerű, Hétköznapi</li><li>Humoros (sokszor oldja a komolyabb témákat is)</li></ul>Műfaji sajátosság</div><div bis_skin_checked=\"1\"><ul><li>határterület a lira és a publicisztika közt</li><li>„versbe írt véleménycikkek”</li></ul></div>",
           "createdAt": "2026-03-22T07:59:32.140Z",
-          "updatedAt": "2026-03-22T08:22:13.105Z"
+          "updatedAt": "2026-03-24T16:49:53.272Z"
         }
       ]
     }

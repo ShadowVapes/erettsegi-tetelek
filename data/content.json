@@ -1,12 +1,12 @@
 {
   "version": 3,
-  "updatedAt": "2026-04-05T23:27:53.558Z",
+  "updatedAt": "2026-04-05T23:29:17.310Z",
   "subjects": [
     {
       "id": "subject_10bb32b1-9899-4546-b958-d790ce6c1e75",
       "title": "Töri",
       "createdAt": "2026-03-09T12:13:42.493Z",
-      "updatedAt": "2026-04-05T20:24:22.880Z",
+      "updatedAt": "2026-04-05T23:29:17.263Z",
       "pages": [
         {
           "id": "page_aa6d3829-da84-4f6f-9c47-6747e9616161",
@@ -32,9 +32,9 @@
         {
           "id": "page_3cd666d1-2470-4356-ac36-95c816c59974",
           "title": "A tatárjárás és az ország újjáépitése IV. Béla idején",
-          "content": "<b><u>Előzményei:</u></b><div><ul><li>Béla előtt II. András (1205-1235), kettős politikát folytatott</li><li>Birtokokat ajándékozott, hogy támogatókat szerezzen - ezért a bevételek csökkentek</li><li>Igy növelte az adókat és a királyi monopóliumok számát - Egyre több ellenség</li><li>1235-ben IV. Béla átvette a trónt, de változtatni akart apja poitikáján</li></ul><b><u>Béla politikája a tatárjárás előtt</u></b></div><div><ul><li>Cél - Királyi hatalom tekintélyének visszaállitása</li><li>Elrendelte az elajándékozott birtokok visszavételét - minden társadalmi réteg ellene fordul</li><li><br></li></ul></div>",
+          "content": "<b><u>Előzményei:</u></b><div><ul><li>Béla előtt II. András (1205-1235), kettős politikát folytatott</li><li>Birtokokat ajándékozott, hogy támogatókat szerezzen - ezért a bevételek csökkentek</li><li>Igy növelte az adókat és a királyi monopóliumok számát - Egyre több ellenség</li><li>1235-ben IV. Béla átvette a trónt, de változtatni akart apja poitikáján</li></ul><b><u>Béla politikája a tatárjárás előtt</u></b></div><div><ul><li>Cél - Királyi hatalom tekintélyének visszaállitása</li><li>Elrendelte az elajándékozott birtokok visszavételét - minden társadalmi réteg ellene fordul</li><li>Amikor hirt kapot</li></ul></div>",
           "createdAt": "2026-03-26T11:54:24.023Z",
-          "updatedAt": "2026-04-05T20:24:22.880Z"
+          "updatedAt": "2026-04-05T23:29:17.263Z"
         },
         {
           "id": "page_5065408e-7e0c-41fc-910f-395cff870663",

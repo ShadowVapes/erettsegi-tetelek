@@ -1,6 +1,6 @@
 {
   "version": 3,
-  "updatedAt": "2026-04-18T17:50:19.901Z",
+  "updatedAt": "2026-04-18T21:03:05.511Z",
   "subjects": [
     {
       "id": "subject_10bb32b1-9899-4546-b958-d790ce6c1e75",
@@ -57,6 +57,21 @@
           "content": "&nbsp; &nbsp; &nbsp;Andrássy Réka a kortárs Magyar irodalom kiemelkedő alkotója, aki eleinte grafikus majd kiemelkedő iró és költő lett. Első kötete a Lehetetlen Bakancslista cimmel 2018-ban, de további művei közé tartozik a Belső partokon és a Minden körbeér egyszer. Költészetére nagy hatással voltak olyan költők mint Kosztolányi Dezső, Arany János és Radnóti Miklós is, mig kortársai közül Lackfi János és Tóth Krisztina emlithető.<div bis_skin_checked=\"1\">&nbsp; &nbsp; &nbsp;Verseiben gyakran jelennek meg filozófiai kérdések például a boldogság keresése, valamit társadalmi problémák mint például a magány, bántalmazás, és a megbocsájtás. Alkotásai nyelvezete hétköznapi és élőbeszédszerű, hangneme pedig sokszor filozofikus, emelkedett máskor ironikus és groteszk</div>",
           "createdAt": "2026-03-22T07:59:32.140Z",
           "updatedAt": "2026-04-01T09:12:38.032Z"
+        }
+      ]
+    },
+    {
+      "id": "subject_f16be060-9ed6-4986-abdc-b6ee2c33afa9",
+      "title": "irásbeli",
+      "createdAt": "2026-04-18T17:50:31.283Z",
+      "updatedAt": "2026-04-18T19:34:03.947Z",
+      "pages": [
+        {
+          "id": "page_078c9786-6400-4259-8b9d-5b6e53c12ba6",
+          "title": "Az ENSZ fogalmazás",
+          "content": "&nbsp; &nbsp; A második világháborút követően 1945. október 24-én megalakult az Egyesült Nemzetek Szervezete (ENSZ), amelynek székhelye New Yorkban található. A szervezet fő célja a nemzetközi béke és biztonság fenntartása, valamint az államok közötti együttműködés elősegítése. Az ENSZ-hez minden békeszerető állam csatlakozhat, amely elfogadja a szervezet alapelveit és vállalja az együttműködést a nemzetközi béke érdekében. Magyarország 1955-ben lett tagja a szervezetnek.<div>&nbsp; &nbsp; &nbsp;Konfliktusok esetén az ENSZ közvetítő szerepet tölt be a felek között, és szükség esetén békefenntartó missziókat is indít. Emellett jelentős humanitárius segítséget nyújt olyan térségekben, ahol háború, éhínség vagy természeti katasztrófa sújtja a lakosságot, például élelmiszerrel, gyógyszerekkel és egyéb létfontosságú támogatással.A szervezet kiemelt feladata az emberi jogok védelme is, hogy minden embert megillessenek az alapvető jogok. Az ENSZ több fő szervből áll, ezek közül a Közgyűlésben minden tagállam képviselteti magát, míg a Biztonsági Tanács a nemzetközi béke és biztonság fenntartásáért felelős.</div><div>&nbsp; &nbsp; &nbsp;Összességében az ENSZ egy olyan nemzetközi szervezet, amely lehetőséget biztosít arra, hogy az államok párbeszéd útján rendezzék vitás kérdéseiket. Bár működése nem mentes a nehézségektől, jelentős mértékben hozzájárul a békésebb és együttműködésen alapuló világrend kialakításához.</div>",
+          "createdAt": "2026-04-18T17:50:44.238Z",
+          "updatedAt": "2026-04-18T19:34:03.947Z"
         }
       ]
     }

@@ -1,6 +1,6 @@
 {
   "version": 3,
-  "updatedAt": "2026-04-20T08:04:59.750Z",
+  "updatedAt": "2026-04-20T08:13:00.196Z",
   "subjects": [
     {
       "id": "subject_10bb32b1-9899-4546-b958-d790ce6c1e75",
@@ -64,7 +64,7 @@
       "id": "subject_f16be060-9ed6-4986-abdc-b6ee2c33afa9",
       "title": "irásbeli",
       "createdAt": "2026-04-18T17:50:31.283Z",
-      "updatedAt": "2026-04-19T19:23:28.426Z",
+      "updatedAt": "2026-04-20T08:13:00.192Z",
       "pages": [
         {
           "id": "page_078c9786-6400-4259-8b9d-5b6e53c12ba6",
@@ -86,6 +86,13 @@
           "content": "&nbsp; &nbsp;A honfoglalás alatt a magyar nép Etelközből a Kárpát-medencébe történő beköltözését értjük. Az okok között említhető, hogy az Etelköz sík területe nehezen volt védhető, szemben a Kárpátok hegyei által körülzárt medencével, amely kedvezőbb feltételeket biztosított a megtelepedéshez. A 9. század végén a magyarok már kapcsolatba kerültek a térség népeivel, és fokozatosan elfoglalták a Kárpát-medence területét.<div>&nbsp; &nbsp; &nbsp;895-ben a magyarokat váratlan besenyő támadás érte, amely hozzájárult ahhoz, hogy véglegesen a Kárpát-medencébe költözzenek. A honfoglalás több lépcsőben zajlott le, és nem egyetlen eseményhez köthető. A magyar társadalom alapját a nagycsaládok alkották, amelyekből nemzetségek, majd törzsek szerveződtek, végül törzsszövetséget hoztak létre. Az elfoglalt területeket gyepű védte, amely egy lakatlan határvidék volt. A magyarság félnomád életmódot folytatott, gazdálkodásának alapját az állattenyésztés képezte, és évszakonként váltogatta szálláshelyeit. Hitvilágukra jellemző volt a túlvilági életbe vetett hit, amit a gazdag mellékletekkel ellátott temetkezések is bizonyítanak. A 10. században a magyarok kalandozó hadjáratokat vezettek Európa különböző területeire, amelyek során könnyűlovasságuk gyorsaságára és harcmodorára támaszkodtak.</div><div>&nbsp; &nbsp; &nbsp;Összességében a honfoglalás meghatározó jelentőségű esemény volt a magyarság történetében, mivel ekkor alakult ki a magyar állam későbbi területi alapja. A Kárpát-medence kedvező adottságai lehetővé tették a tartós megtelepedést, és megalapozták a későbbi államszervezést.</div>",
           "createdAt": "2026-04-19T18:01:37.867Z",
           "updatedAt": "2026-04-19T19:23:28.426Z"
+        },
+        {
+          "id": "page_79bb6787-870c-4a9a-be1f-710ec003bf1f",
+          "title": "Áprilisi törvények és a kiegyezés",
+          "content": "",
+          "createdAt": "2026-04-20T08:13:00.192Z",
+          "updatedAt": "2026-04-20T08:13:00.192Z"
         }
       ]
     }

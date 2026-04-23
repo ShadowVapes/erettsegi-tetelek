@@ -1,6 +1,6 @@
 {
   "version": 3,
-  "updatedAt": "2026-04-23T18:09:06.861Z",
+  "updatedAt": "2026-04-23T19:18:18.186Z",
   "subjects": [
     {
       "id": "subject_10bb32b1-9899-4546-b958-d790ce6c1e75",
@@ -64,7 +64,7 @@
       "id": "subject_f16be060-9ed6-4986-abdc-b6ee2c33afa9",
       "title": "irásbeli",
       "createdAt": "2026-04-18T17:50:31.283Z",
-      "updatedAt": "2026-04-23T18:09:06.856Z",
+      "updatedAt": "2026-04-23T19:18:18.183Z",
       "pages": [
         {
           "id": "page_078c9786-6400-4259-8b9d-5b6e53c12ba6",
@@ -128,13 +128,6 @@
           "content": "<p data-start=\"468\" data-end=\"714\">&nbsp; &nbsp; &nbsp;Szent István (I. István) uralkodása alatt, a 10–11. század fordulóján alakult ki a magyar keresztény királyság államszervezete. Célja a magyarság beillesztése volt a keresztény Európa államrendszerébe, valamint egy erős, központosított királyi hatalom kiépítése, amely biztosította az állam hosszú távú fennmaradását.</p>\n<p data-start=\"595\" data-end=\"971\">&nbsp; &nbsp; &nbsp;István egyik legfontosabb intézkedése az egyházszervezet kiépítése volt. Az országban püspökségeket hozott létre, köztük az esztergomi és kalocsai érsekséget, amelyek élén érsekek álltak. Az egyházszervezet nemcsak vallási, hanem politikai szempontból is kulcsszerepet játszott, mivel támogatta a király hatalmát és segítette a kereszténység elterjesztését a lakosság körében. Az államszervezés másik alapja a vármegyerendszer kialakítása volt. István az országot vármegyékre osztotta, amelyek élén az ispán állt, akit a király nevezett ki. A vármegyék katonai, közigazgatási és gazdasági egységek voltak, és a királyi hatalom helyi megszilárdítását szolgálták. Ezzel István a hatalmat központosított formában tudta gyakorolni az egész ország területén. István uralkodásának fontos eleme volt a kereszténység államvallássá tétele. Kötelezővé tette a templomépítést, a vasárnapi mise látogatását, valamint a keresztény szokások betartását. Törvényei szabályozták a társadalmi életet, és szigorúan felléptek a pogány szokásokkal szemben. Ezek az intézkedések hozzájárultak a keresztény állami rend megszilárdulásához.</p>\n<p data-start=\"1714\" data-end=\"2056\">&nbsp; &nbsp; &nbsp;Összességében Szent István államszervező tevékenysége egy erős, központosított keresztény királyság létrejöttét eredményezte. Az egyházszervezet és a vármegyerendszer kiépítésével olyan államot hozott létre, amely hosszú távon biztosította Magyarország fennmaradását és beilleszkedését a keresztény Európa politikai és kulturális rendszerébe.</p>",
           "createdAt": "2026-04-20T12:15:25.123Z",
           "updatedAt": "2026-04-20T15:14:59.895Z"
-        },
-        {
-          "id": "page_8a28f45d-0ee4-4759-8303-fa690690077b",
-          "title": "Balázs Béla: Mosolygó Tündér Ilona meséje",
-          "content": "",
-          "createdAt": "2026-04-23T18:09:06.856Z",
-          "updatedAt": "2026-04-23T18:09:06.856Z"
         }
       ]
     }
@@ -160,6 +153,11 @@
       "id": "page_2456150f-aebd-4cb2-b4ce-3d0f049a9f8f",
       "subjectId": "subject_10bb32b1-9899-4546-b958-d790ce6c1e75",
       "updatedAt": "2026-04-20T12:02:28.975Z"
+    },
+    {
+      "id": "page_8a28f45d-0ee4-4759-8303-fa690690077b",
+      "subjectId": "subject_f16be060-9ed6-4986-abdc-b6ee2c33afa9",
+      "updatedAt": "2026-04-23T19:18:18.183Z"
     }
   ]
 }
